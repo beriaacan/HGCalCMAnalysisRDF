@@ -58,7 +58,12 @@ def _refuse_central_calibration(recipe: DatasetConfig, role: str) -> None:
 
 def plan(config: AnalysisConfig, *, for_execution: bool = False) -> tuple[PedestalJob, ...]:
     """Group shared targets; central calibrations remain read-only inputs."""
-    recipes = (("derive", config.correction), ("apply", config.target))
+    from utils.datasets import recipes as source_recipes
+    recipes = tuple(("derive",r) for r in source_recipes(config) if not r.conditions)
+    if not config.target.conditions:
+        recipes += (("apply",config.target),)
+    if not recipes:
+        raise ValueError('Pedestal production is unavailable for central era conditions; use the resolved central calibration')
     # Check central availability before reporting local-target configuration or
     # overwrite errors. Existing central inputs remain usable in mixed recipes
     # where another block genuinely requests a missing local calibration.

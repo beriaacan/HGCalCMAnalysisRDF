@@ -11,7 +11,7 @@ from typing import Any
 
 from .calibrations import validate_calibration_run
 from .config import AnalysisConfig, DatasetConfig, SourceRun
-from .nano import read_module_metadata, root_path
+from .nano import REQUIRED_NANO_COLUMNS, read_module_metadata, root_path
 from .paths import discover_files
 
 SCHEMA = 'hgcal_cm_prepared_v2'
@@ -29,16 +29,20 @@ class PreparationJob:
     roles: tuple[str, ...]
     root: Path
     variant: str
+    conditions: dict | None = None
 
 
 @lru_cache(maxsize=128)
 def _metadata_modules(filename, size, mtime_ns):
     """Only Runs metadata; cache invalidates when source file identity changes."""
-    return tuple(read_module_metadata(filename))
+    return tuple(read_module_metadata(filename)) if _file_info(filename)['entries'] else ()
 
 
 def derivation_modules(config):
     """Exact derivation inventory for apply_modules: all, never a target selector."""
+    if config.derivations:
+        from .datasets import recipes, single
+        return tuple(sorted({name for row in recipes(config) for name in derivation_modules(single(config,row))}))
     selection = config.correction.modules
     if not isinstance(selection, str):
         return selection
@@ -58,17 +62,19 @@ def plan(config: AnalysisConfig) -> tuple[PreparationJob, ...]:
     target=config.target
     if target.modules=='all':
         target=replace(target,modules=derivation_modules(config))
-    for role, recipe in (('derive', config.correction), ('apply', target)):
+    from .datasets import recipes
+    for role, recipe in [*(('derive',r) for r in recipes(config)), ('apply', target)]:
         for source in recipe.dataset.sources:
             key = (recipe.campaign, source, recipe.pedestal.run,
-                   recipe.calibration_file, recipe.module_map)
+                   recipe.calibration_file, recipe.module_map, json.dumps(recipe.conditions,sort_keys=True))
             grouped.setdefault(key, []).append((role, recipe))
     jobs = tuple(PreparationJob(campaign, source, pedestal, calibration, locator,
                                 tuple(dict.fromkeys(recipe.modules for _, recipe in entries)),
                                 tuple(dict.fromkeys(role for role, _ in entries)),
                                 config.output_dir / campaign / 'prepared' / f'Run{source.run}',
-                                _variant(config, campaign, source, pedestal, calibration, locator))
-                 for (campaign, source, pedestal, calibration, locator), entries in grouped.items())
+                                _variant(config, campaign, source, pedestal, calibration, locator,json.loads(conditions)),
+                                json.loads(conditions))
+                 for (campaign, source, pedestal, calibration, locator,conditions), entries in grouped.items())
     destinations = [cache_directory(job) for job in jobs]
     if len(set(destinations)) != len(destinations):
         raise ValueError('Different preparation recipes target the same readable cache directory. '
@@ -76,14 +82,16 @@ def plan(config: AnalysisConfig) -> tuple[PreparationJob, ...]:
     return jobs
 
 
-def _variant(config, campaign, source, pedestal, calibration, locator):
+def _variant(config, campaign, source, pedestal, calibration, locator, conditions=None):
     from .identity import preparation_recipe, variant
     return variant(preparation_recipe(source, campaign, pedestal, calibration, locator,
-                                      config.preparation['activity_thresholds']))
+                                      config.preparation['activity_thresholds'],conditions,config.dnn['cell_area_file']))
 
 
 def cache_directory(job: PreparationJob) -> Path:
-    return job.root / f'pedestals_{job.pedestal_run}' / job.variant
+    label=(f'conditions_{job.conditions["era"].replace("/", "")}_Run{job.conditions["run"]}'
+           if job.conditions else f'pedestals_{job.pedestal_run}')
+    return job.root / label / job.variant
 
 
 
@@ -127,16 +135,13 @@ def _file_info(filename: str) -> dict:
         if not tree:
             raise ValueError(f'Missing Events tree: {filename}')
         branches = {str(branch.GetName()) for branch in tree.GetListOfBranches()}
-        required = {'event', 'orbitNumber', 'bunchCrossing', 'HGCMetaData_trigTime',
-                    'HGCDigi_fedId', 'HGCDigi_fedReadoutSeq', 'HGCDigi_channel',
-                    'HGCDigi_flags', 'HGCDigi_tctp', 'HGCDigi_adc', 'HGCDigi_adcm1',
-                    'HGCDigi_cm', 'HGCDigi_tot', 'HGCDigi_toa', 'HGCDigi_chType',
-                    'HGCDigi_chI1', 'HGCDigi_chI2'}
-        if required - branches:
+        entries = int(tree.GetEntries())
+        required = set(REQUIRED_NANO_COLUMNS)
+        if entries and required - branches:
             raise ValueError(f'Missing Nano branches in {filename}: {sorted(required - branches)}')
         stat = Path(filename).stat()
         return {'path': filename, 'uuid': str(handle.GetUUID().AsString()),
-                'entries': int(tree.GetEntries()), 'size': stat.st_size,
+                'entries': entries, 'size': stat.st_size,
                 'mtime_ns': stat.st_mtime_ns,
                 'has_trigger_valid': 'HGCMetaData_trigValid' in branches}
     finally:
@@ -145,7 +150,11 @@ def _file_info(filename: str) -> dict:
 
 def resolve(config: AnalysisConfig, job: PreparationJob) -> dict[str, Any]:
     """Read only headers and constants, never event data, to identify this cache."""
-    validate_calibration_run(job.calibration_file, job.pedestal_run)
+    if job.conditions:
+        from .conditions import validate
+        validate(job.conditions,job.calibration_file,job.module_map)
+    else:
+        validate_calibration_run(job.calibration_file, job.pedestal_run)
     locator = _locator(job.module_map)
     calibration = json.loads(job.calibration_file.read_text())
     return _resolve_files(config, job, locator, calibration)
@@ -154,8 +163,23 @@ def resolve(config: AnalysisConfig, job: PreparationJob) -> dict[str, Any]:
 def _resolve_files(config, job, locator, calibration) -> dict:
     from .config import Dataset
     files = discover_files(Dataset(job.source.run, (job.source,), None, None))
-    available = read_module_metadata(files[0])
+    info = []
+    offset = 0
+    uuids = set()
+    for index, filename in enumerate(files):
+        item = _file_info(filename)
+        if item['uuid'] in uuids:
+            raise ValueError(f'Duplicate Nano UUID in preparation inputs: {filename}')
+        uuids.add(item['uuid'])
+        item.update(index=index, entry_offset=offset)
+        offset += item['entries']
+        info.append(item)
+    populated = [item for item in info if item['entries']]
+    if not populated:
+        raise ValueError(f'No events in any Nano file for Run{job.source.run}')
+    available = read_module_metadata(populated[0]['path'])
     modules = {}
+    cell_areas=json.loads(config.dnn['cell_area_file'].read_text())
     for selection in job.selections:
         if isinstance(selection, str):
             names = [name for name in available if selection == 'all'
@@ -189,26 +213,19 @@ def _resolve_files(config, job, locator, calibration) -> dict:
             modules[name] = {'identity': identity, 'locator': row,
                              'calibration': {field: constants[field]
                                              for field in ('ADC_ped', 'CM_ped', 'Noise', 'Valid')}}
-    info = []
-    offset = 0
-    uuids = set()
-    for index, filename in enumerate(files):
-        if index:
-            other = read_module_metadata(filename)
-            for name, module in modules.items():
-                if other.get(name) != module['identity']:
-                    raise ValueError(f'Module identity changes for {name} in {filename}')
-        item = _file_info(filename)
-        if item['uuid'] in uuids:
-            raise ValueError(f'Duplicate Nano UUID in preparation inputs: {filename}')
-        uuids.add(item['uuid'])
-        item.update(index=index, entry_offset=offset)
-        offset += item['entries']
-        info.append(item)
+            from .preprocessing import absent_erx,cm_reference
+            areas=cell_areas.get(name[:4],{}).get('SF')
+            modules[name]['absent_erx']=absent_erx(constants,nch,name,areas)
+            cm_reference(constants,nch,name,areas)  # Reject present but uncalibrated hardware early.
+    for item in populated[1:]:
+        other = read_module_metadata(item['path'])
+        for name, module in modules.items():
+            if other.get(name) != module['identity']:
+                raise ValueError(f'Module identity changes for {name} in {item["path"]}')
     central = FRAMEWORK_ROOT.parent.parent / 'LocalCalibration/python/DigiAnalysisUtils.py'
     code = {name: _sha(FRAMEWORK_ROOT / name) for name in
             ('prepare.py', 'utils/prepared.py', 'utils/prepare_rdf.py',
-             'utils/prepare_helpers.hxx', 'utils/nano.py')}
+             'utils/prepare_helpers.hxx', 'utils/nano.py','utils/preprocessing.py','utils/conditions.py','utils/datasets.py')}
     code['central/DigiAnalysisUtils.py'] = _sha(central)
     definition = {'schema': SCHEMA, 'campaign': job.campaign, 'run': job.source.run,
                   'pedestal_run': job.pedestal_run, 'files': info,
@@ -217,7 +234,10 @@ def _resolve_files(config, job, locator, calibration) -> dict:
                               for name, row in modules.items()},
                   'calibration_sha256': _sha(job.calibration_file),
                   'module_map_sha256': _sha(job.module_map),
-                  'activity_thresholds': config.preparation['activity_thresholds'], 'code_sha256': code}
+                  'activity_thresholds': config.preparation['activity_thresholds'], 'code_sha256': code,
+                  'cell_area_sha256':_sha(config.dnn['cell_area_file'])}
+    if job.conditions:
+        definition['conditions']=job.conditions
     encoded = json.dumps(definition, sort_keys=True, separators=(',', ':'))
     signature = hashlib.sha256(encoded.encode()).hexdigest()
     return {'job': job, 'definition': definition, 'signature': signature,

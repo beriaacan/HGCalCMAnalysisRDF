@@ -10,7 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from utils.workflow_registry import (atomic_json, check_freeze, evidence, receipt_valid,
+from utils.workflow_registry import (lock_context, atomic_json, check_freeze, evidence, receipt_valid,
     claim, update, release, owner_at, write_state, stamp, load_record, intact, describe_owner)
 
 ROOT = Path(__file__).resolve().parent
@@ -27,7 +27,8 @@ def worker(path, job_id):
     owner = {'token': record['token'], 'status': 'running', 'work': record['work'],
              'node': record['node'], 'state_file': record['state_file'],
              'host': __import__('socket').gethostname(), 'pid': os.getpid(), 'job_id': job_id,
-             'updated': stamp()}
+             'updated': stamp(), **lock_context(record)}
+    os.environ['HGCAL_LOCK_CONTEXT'] = json.dumps(lock_context(record))
     for lock in record['registry_locks']:
         if not Path(lock).exists() or owner_at(lock).get('token') != record['token']:
             raise ValueError('Worker has no producer claim; submit through the generated DAG')
@@ -39,7 +40,20 @@ def worker(path, job_id):
             raise ValueError(describe_owner(*busy))
         update(record['locks'], owner)
         config = load_config(record['config'], steps=[record['stage']])
-        complete, files = probe(config, record['stage'])
+        if record.get('source_model_check'):
+            from utils.model_compatibility import find,find_linear
+            from utils.model_selection import read_model
+            from utils.workflow_products import artifact_files
+            for folder in record['source_model_check']:
+                method=record.get('source_model_method','dnn')
+                selected=find(config,Path(folder).name) if method=='dnn' else find_linear(config,method)[0]
+                if str(selected)!=folder:
+                    raise ValueError('Frozen source-model selection changed; prepare a new workflow')
+                if method=='dnn':
+                    read_model(Path(folder))
+            complete,files=True,sorted(artifact_files(record['source_model_check']))
+        else:
+            complete, files = probe(config, record['stage'])
         if record['stage'] in {'plots', 'multimodule_plot'}:
             if receipt_valid(record):
                 saved = json.loads(Path(record['receipt']).read_text())
@@ -61,11 +75,12 @@ def worker(path, job_id):
             files = completed_files(config, record['stage'])
         else:
             print(f'Workflow {record["node"]}: reusing verified existing products', flush=True)
+        outputs=record.get('source_model_check') or output_paths(config,record['stage'])
         atomic_json(record['receipt'], {'request': record['request'], 'complete': True,
             'stage': record['stage'], 'work': record['work'], 'node': record['node'],
-            'evidence': evidence(files), 'completed': stamp(), 'outputs': output_paths(config, record['stage'])})
+            'evidence': evidence(files), 'completed': stamp(), 'outputs': outputs})
         write_state(record, 'reused' if complete else 'complete', job_id=job_id,
-                    outputs=output_paths(config, record['stage']))
+                    outputs=outputs)
         release([*record['locks'], *record['registry_locks']], record['token'])
     except BaseException as error:
         owner.update(status='failed', updated=stamp(), error=str(error))
@@ -189,14 +204,22 @@ def main():
                          help='Monitor the latest saved workflow with --config, or provide an explicit directory')
     actions.add_argument('--resume', type=Path, help='Resume a stopped DAG with its frozen configs and rescue information')
     actions.add_argument('--release', type=Path, help='Release a stopped producer after explicit owner confirmation')
+    actions.add_argument('--clear-locks', action='store_true',
+                         help='List indexed locks; add --owner-stopped to clear them after queue/PID checks')
     actions.add_argument('--worker', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--refresh-plots', action='store_true', help='Render figures again; numerical caches remain reusable')
     parser.add_argument('--json', action='store_true', help='Print machine-readable plan/status')
     parser.add_argument('--node', help='Node name for --release')
-    parser.add_argument('--owner-stopped', action='store_true', help='Confirm the owning DAG/workers have stopped before releasing locks')
+    parser.add_argument('--owner-stopped', action='store_true', help='Confirm all affected owners stopped before releasing or clearing locks')
     parser.add_argument('--job-id', default='unknown', help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
+        if args.clear_locks:
+            if args.refresh_plots or args.node:
+                parser.error('--clear-locks accepts --config, --owner-stopped and --json only')
+            from utils.workflow_cleanup import clear_locks
+            clear_locks(args.config, owner_stopped=args.owner_stopped, as_json=args.json)
+            return 0
         if args.worker:
             worker(args.worker.resolve(), args.job_id)
             return 0

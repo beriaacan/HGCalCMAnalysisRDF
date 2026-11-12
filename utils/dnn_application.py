@@ -30,9 +30,11 @@ def application_code_hashes(config):
 
 def describe(config):
     from .dnn_training import destination
+    from .model_compatibility import find
     group = 'combined' if config.training['training_grouping'] == 'combined' else '<module>'
+    selected=find(config,group,required=False) if group!='<module>' else None
     return {'destination': str(Path(resolve_paths(config)['target']['predictions']) / method_directory(config, 'dnn')),
-            'model': str(destination(config,group)),
+            'model': str(selected or destination(config,group)),
             'resources': config.application, 'infer_batch': config.dnn['infer_batch'],
             'checkpoint': 'best model.pt; saved feature ordering and normalization',
             'selection': 'application event/channel selections only; no split, retention or training weights',
@@ -179,7 +181,8 @@ def run(config, resolved):
         raise ValueError(f'Application lock DIRECTORY exists: {lock}; recorded owner: {details}. '
                          'Check that process on its recorded host before removing only this lock.') from None
     try:
-        (lock/'owner.json').write_text(json.dumps({'host': socket.gethostname(), 'pid': os.getpid()}))
+        from utils.workflow_registry import record_lock_owner
+        record_lock_owner(lock, {'host': socket.gethostname(), 'pid': os.getpid()})
         existing = analytic.cached_application(resolved)
         if existing and existing['complete']:
             print(f'Reusing applied DNN corrections: {destination}', flush=True)

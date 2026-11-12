@@ -37,7 +37,19 @@ def dnn_definition():
             'normalization_storage': 'frozen mean/scale buffers inside the model checkpoint'}
 
 
-def cm_reference(calibration, nch, module):
+def absent_erx(calibration,nch,module,areas=None):
+    if areas is None:
+        central=Path(__file__).resolve().parents[3]/'LocalCalibration/data/cellareas.json'
+        areas=json.loads(central.read_text()).get(module[:4],{}).get('SF')
+    valid=calibration.get('Valid',[])
+    if (not isinstance(areas,list) or len(areas)!=nch or len(valid)!=nch
+            or any(not isinstance(x,(int,float)) or not math.isfinite(x) or x<0 for x in areas)):
+        raise ValueError(f'Invalid geometry/validity while identifying absent eRx: {module}')
+    return [all(areas[c]==0 for c in range(start,start+37))
+            and all(valid[c]==0 for c in range(start,start+37)) for start in range(0,nch,37)]
+
+
+def cm_reference(calibration, nch, module, areas=None):
     """One equal-weight reference per real eRx, excluding invalid placeholders."""
     if calibration.get('Channel') != list(range(nch)) or nch % 37:
         raise ValueError(f'Invalid calibration channel mapping for {module}')
@@ -45,7 +57,11 @@ def cm_reference(calibration, nch, module):
     if len(ped) != nch or len(valid) != nch:
         raise ValueError(f'Incomplete CM calibration for {module}')
     result = []
+    absent=absent_erx(calibration,nch,module,areas)
     for start in range(0, nch, 37):
+        if absent[start//37]:
+            result.append(float('nan'))  # Missing input, never a fabricated CM pedestal.
+            continue
         values = [float(ped[c]) for c in range(start, start+37)
                   if valid[c] == 1 and isinstance(ped[c], (int, float)) and math.isfinite(ped[c])]
         if not values:
@@ -59,14 +75,14 @@ def _calibration(path, size, mtime):
     return json.loads(Path(path).read_text())
 
 
-def reference_from_file(path, module, nch):
+def reference_from_file(path, module, nch, areas=None):
     path = Path(path)
     stat = path.stat()
     data = _calibration(str(path), stat.st_size, stat.st_mtime_ns)
     key = module.replace('_', '-')
     if key not in data:
         raise ValueError(f'Calibration lacks module {module}: {path}')
-    return cm_reference(data[key], nch, module)
+    return cm_reference(data[key], nch, module,areas)
 
 
 def descriptor(spec):

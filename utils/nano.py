@@ -1,6 +1,26 @@
 """Strict Nano metadata and EOS access shared by framework steps."""
 from __future__ import annotations
 
+# Only used to describe a zero-entry source; no synthetic event is generated.
+REQUIRED_NANO_COLUMNS = {
+    'event': 'ULong64_t(0)', 'orbitNumber': 'unsigned(0)',
+    'bunchCrossing': 'unsigned(0)', 'HGCMetaData_trigTime': 'float(0)',
+    **{'HGCDigi_'+name: 'ROOT::RVec<int>{}' for name in (
+        'fedId', 'fedReadoutSeq', 'channel', 'flags', 'tctp', 'adc', 'adcm1',
+        'cm', 'tot', 'toa', 'chType', 'chI1', 'chI2')},
+}
+
+
+def empty_dataframe(ROOT, *, trigger_valid=False):
+    """Typed empty input for the usual central selectors and prepared Snapshot."""
+    node = ROOT.RDataFrame(0)
+    for name, expression in REQUIRED_NANO_COLUMNS.items():
+        node = node.Define(name, expression)
+    if trigger_valid:
+        node = node.Define('HGCMetaData_trigValid', 'bool(false)')
+    return node
+
+
 def root_path(path: str) -> str:
     if path.startswith("/eos/cms/"):
         return "root://eoscms.cern.ch/" + path

@@ -33,13 +33,10 @@ def resolve_application(config):
     from training_inputs import load_inputs
     if config.target.selection not in {'full', 'trigtime'}:
         raise NotImplementedError('CM application supports full or trigtime application selections')
-    directory, training = load_inputs(config)
-    expected_model = analytic.definition(config, directory, training)
-    model_dir = Path(analytic.describe(config)['destination'])
-    stored = analytic.cached_predictors(model_dir, expected_model)
-    if stored is None:
-        raise FileNotFoundError(f'Run --steps analytic before CM-only application: {model_dir}')
-    spec = analytic.cm_manifest(training)['feature_spec']
+    from .model_compatibility import find_linear
+    model_dir,stored=find_linear(config,'analytic')
+    expected_model=stored['definition']
+    spec=expected_model['feature_spec']
     modules = {}
     for job in plan(config):
         if 'apply' not in job.roles:
@@ -82,7 +79,7 @@ def resolve_application(config):
     recipe = config.target
     definition = {'schema': SCHEMA, 'method': 'analytic',
         'target': {'campaign': recipe.campaign, 'runs': [s.run for s in recipe.dataset.sources],
-                   'pedestal_run': recipe.pedestal.run, 'selection': recipe.selection,
+                   'pedestal_run': recipe.pedestal.run, 'conditions':recipe.conditions,'selection': recipe.selection,
                    'trigger_time_window': recipe.trigger_time_window,
                    'adc_min': recipe.dataset.adcmin, 'adc_max': recipe.dataset.adcmax},
         'model_definition_signature': signature(expected_model), 'feature_spec_sha256': signature(spec),

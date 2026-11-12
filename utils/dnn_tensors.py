@@ -71,6 +71,8 @@ class TensorExpander:
         area=[self.spec['modules'][n]['cell_area_fraction']+[0.]*(width-self.spec['modules'][n]['nch']) for n in self.names]
         self.area=torch.tensor(area,dtype=torch.float32,device=self.device)
         self.weight_table=None
+        self.dataset_ids=({int(k):v['dataset_index'] for k,v in manifest['stream_table'].items()}
+                          if 'stream_table' in manifest and partition==1 else None)
         if config.dnn['sample_weighting']!='none':
             from .training import sample_weights
             self.runs=sorted({int(run) for n in self.names for run in manifest['counts_by_module_run'][n]})
@@ -129,4 +131,7 @@ class TensorExpander:
                 weights=self.weight_table[modules[rows],run_ids[rows],channels]
             if not bool(torch.isfinite(x).all()) or not bool(torch.isfinite(y).all()) or not bool(torch.isfinite(weights).all()):
                 raise ValueError('Nonfinite tensor-expanded inputs, targets or weights')
+            if self.dataset_ids is not None:
+                ids=np.asarray([self.dataset_ids[int(run)] for run in payload['runs']],dtype=np.int64)
+                return x,y,weights,self._transfer(ids)[rows]
             return x,y,weights

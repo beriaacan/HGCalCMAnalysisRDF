@@ -41,6 +41,11 @@ def main() -> int:
             print_catalogue(config)
             return 0
         if args.show:
+            from dataclasses import replace
+            current=tuple('dnn' if step=='train' else step for step in config.steps
+                          if step in {'train','analytic','analytic_allinputs'})
+            if current:
+                config=replace(config,training=dict(config.training,_workflow_current_models=current))
             written, effective = read_settings(args.config)
             print(json.dumps({
                 "settings_supplied": sorted(written),

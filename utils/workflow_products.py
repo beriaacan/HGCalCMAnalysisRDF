@@ -16,7 +16,8 @@ def output_paths(config, stage):
     from .paths import resolve_paths
     paths = resolve_paths(config)
     if stage == 'pedestals':
-        return sorted({str(r.calibration_file) for r in (config.correction, config.target)})
+        from .datasets import recipes
+        return sorted({str(r.calibration_file) for r in (*recipes(config), config.target)})
     if stage == 'prepare':
         from .prepared import plan, cache_directory
         return [str(cache_directory(job)) for job in plan(config)]
@@ -60,23 +61,27 @@ def lock_paths(config, stage):
     per run/calibration; per-module standalone training jobs keep separate scopes.
     """
     out = config.output_dir
+    from .datasets import recipes,calibration_label
     locks = []
     def add(scope, base=None):
         root = Path(base) if base is not None else out
         locks.append(str(root/'.workflow-locks'/digest(str(Path(scope).resolve()))))
     correction, target = config.correction, config.target
     source = (out/correction.campaign/'training'/str(correction.dataset.run)
-              /f'pedestals_{correction.pedestal.run}'/correction.selection)
+              /calibration_label(correction)/correction.selection)
     evaluation = (out/target.campaign/'evaluation'/str(target.dataset.run)
-                  /f'pedestals_{target.pedestal.run}'/target.selection/config.model_dir.name)
+                  /calibration_label(target)/target.selection/config.model_dir.name)
+    if config.derivations:
+        from .identity import input_id
+        source=out/'joint'/'training'/input_id(config)
     if stage == 'pedestals':
-        for row in (correction, target):
+        for row in (*recipes(config), target):
             if not row.calibration_file.is_file():
                 add(row.calibration_file, row.calibration_file.parent)
     elif stage == 'prepare':
-        for row in (correction, target):
+        for row in (*recipes(config), target):
             for run in row.dataset.sources:
-                add(out/row.campaign/'prepared'/f'Run{run.run}'/f'pedestals_{row.pedestal.run}')
+                add(out/row.campaign/'prepared'/f'Run{run.run}'/calibration_label(row))
     elif stage in {'training_inputs', 'training_cache'}:
         add(source/stage)
         if stage == 'training_inputs':
@@ -107,6 +112,7 @@ def request_key(config, stage):
     """Logical job identity; final scientific paths are re-resolved by each worker."""
     from .identity import input_id, linear_id, model_id, population, variant
     from .paths import resolve_paths
+    from .inference_config import method_directory
     if stage == 'prepare':
         from .prepared import plan, cache_directory
         return digest({'stage': stage, 'destinations': [str(cache_directory(job)) for job in plan(config)]})
@@ -125,7 +131,7 @@ def request_key(config, stage):
                        'models': {g: model_id(config, g) for g in groups}})
     target = {'target': population(config, target=True), 'modules': config.target.modules,
               'methods': list(config.methods), 'model_dir': str(config.model_dir),
-              'models': {m: model_id(config) if m == 'dnn' else linear_id(config)
+              'models': {m: method_directory(config,m).as_posix()
                          for m in config.methods if m != 'uncorrected'},
               'output_dir': str(config.output_dir), 'unknown': config.dnn['allow_unknown_modules']}
     if stage in {'plots', 'multimodule_plot'}:
@@ -149,7 +155,8 @@ def artifact_files(directories):
 
 def dependencies_files(config):
     files = {config.dnn['cell_area_file']}
-    for recipe in (config.correction, config.target):
+    from .datasets import recipes
+    for recipe in (*recipes(config), config.target):
         files.update((recipe.calibration_file, recipe.module_map))
         for source in recipe.dataset.sources:
             from .paths import discover_files
@@ -189,13 +196,15 @@ def probe(config, stage):
     a matching workflow receipt proves that exact render request already finished.
     """
     directories, extra_files = [], set()
+    from .datasets import recipes
+    calibration_recipes=(*recipes(config),config.target)
     if stage == 'pedestals':
         from .calibrations import validate_calibrations
-        if not all(r.calibration_file.is_file() for r in (config.correction, config.target)):
+        if not all(r.calibration_file.is_file() for r in calibration_recipes):
             return False, []
         validate_calibrations(config, require_files=True)
-        return True, sorted({r.calibration_file for r in (config.correction, config.target)})
-    if not all(r.calibration_file.is_file() for r in (config.correction, config.target)):
+        return True, sorted({r.calibration_file for r in calibration_recipes})
+    if not all(r.calibration_file.is_file() for r in calibration_recipes):
         return False, []
     try:
         if stage == 'prepare':
@@ -270,8 +279,17 @@ def probe(config, stage):
         elif stage == 'apply':
             import apply as linear
             for method in config.methods:
-                if method != 'uncorrected' and not probe(config, 'train' if method == 'dnn' else method)[0]:
-                    return False, []
+                if method=='dnn':
+                    from .model_compatibility import find
+                    from .prepared import derivation_modules
+                    groups=['combined'] if config.training['training_grouping']=='combined' else derivation_modules(config)
+                    if any(find(config,g,required=False) is None for g in groups):
+                        return False,[]
+                    continue
+                if method in {'analytic','analytic_allinputs'}:
+                    from .model_compatibility import find_linear
+                    if find_linear(config,method,required=False) is None:
+                        return False,[]
             for method in config.methods:
                 if method == 'uncorrected':
                     continue

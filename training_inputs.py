@@ -20,8 +20,10 @@ ROOT_DIR = Path(__file__).resolve().parent
 
 
 def describe(config: AnalysisConfig) -> dict:
+    from utils.datasets import recipes
     return {'destination': resolve_paths(config)['dnn_training_inputs'],
-            'derive_runs': [source.run for source in config.correction.dataset.sources],
+            'derive_runs': ([{'campaign':row.campaign,'run':source.run} for row in recipes(config) for source in row.dataset.sources]
+                            if config.derivations else [source.run for source in config.correction.dataset.sources]),
             'feature_groups': config.dnn['input_features'], 'max_channels': config.dnn['max_channels'],
             'linear_feature_groups': statistics_config(config).dnn['input_features'],
             'processing': 'one shared event-selection/counting pass per prepared run/file/module',
@@ -38,7 +40,8 @@ def describe(config: AnalysisConfig) -> dict:
 
 def _code_hashes(config):
     return {name: _sha(ROOT_DIR/name) for name in ('training_inputs.py','utils/training.py',
-            'utils/training_helpers.hxx','utils/module_registry.py','utils/preprocessing.py','utils/identity.py')}
+            'utils/training_helpers.hxx','utils/module_registry.py','utils/preprocessing.py','utils/identity.py',
+            'utils/datasets.py','utils/conditions.py')}
 
 
 def _sha(path: Path) -> str:
@@ -55,6 +58,8 @@ def _selected(config, available):
 
 
 def resolve_inputs(config: AnalysisConfig, *, register_modules=False) -> dict:
+    if config.derivations:
+        return resolve_joint_inputs(config,register_modules=register_modules)
     if 'test' in config.correction.selection:
         raise ValueError('training_inputs requires derive_selection full or trigtime, not a held-out selection')
     if config.diagnostics['plot_dnninputs']:
@@ -111,6 +116,50 @@ def resolve_inputs(config: AnalysisConfig, *, register_modules=False) -> dict:
             'signature': signature, 'definition': definition, 'prepared': prepared, 'feature_spec': spec}
 
 
+def index_path(prepared, item):
+    prefix=(Path(f'dataset{prepared["dataset_index"]}_{prepared["campaign"]}')
+            if 'dataset_index' in prepared else Path())
+    return prefix/f'Run{prepared["run"]}'/item['module']/Path(item['file']).name
+
+
+def resolve_joint_inputs(config, *, register_modules=False):
+    from utils.datasets import recipes,single,stream_table
+    from utils.identity import digest
+    rows=[resolve_inputs(single(config,r),register_modules=register_modules) for r in recipes(config)]
+    modules={};prepared=[];definitions=[];seen=set()
+    for index,(recipe,row) in enumerate(zip(recipes(config),rows)):
+        for name,meta in row['feature_spec']['modules'].items():
+            if name in modules and modules[name]!=meta:
+                raise ValueError(f'Joint datasets disagree on physical geometry/module ID: {name}')
+            modules[name]=meta
+        for base,definition in zip(row['prepared'],row['definition']['prepared']):
+            for source in definition['files']:
+                if source['uuid'] in seen:
+                    raise ValueError('Duplicate physical Nano UUID across derivation datasets: '+source['uuid'])
+                seen.add(source['uuid'])
+            prepared.append(dict(base,dataset_index=index))
+            definitions.append(dict(definition,dataset_index=index,campaign=recipe.campaign))
+    spec=dict(rows[0]['feature_spec'],modules=dict(sorted(modules.items())))
+    linear_modules={name:dict(meta,module_id=i+1) for i,(name,meta) in enumerate(sorted(modules.items()))}
+    linear_spec=dict(rows[0]['definition']['linear_feature_spec'],modules=linear_modules)
+    for row in rows[1:]:
+        if {k:v for k,v in row['feature_spec'].items() if k!='modules'}!={k:v for k,v in spec.items() if k!='modules'}:
+            raise ValueError('Joint datasets have incompatible feature contracts')
+    table=stream_table(definitions)
+    for row in definitions:
+        row['stream_id']=next(int(k) for k,v in table.items()
+                              if v=={'dataset_index':row['dataset_index'],'run':row['run']})
+    definition={'schema':SCHEMA,'feature_spec':spec,'linear_feature_spec':linear_spec,
+        'options':rows[0]['definition']['options'],'campaign':'joint','selection':'per_dataset',
+        'trigger_time_window':None,'adc_min':None,'adc_max':None,'split_identity':spec['split_identity'],
+        'datasets':[{k:r['definition'][k] for k in ('campaign','selection','trigger_time_window','adc_min','adc_max')}
+                    | {'modules':list(r['feature_spec']['modules'])} for r in rows],
+        'stream_table':table,'prepared':definitions,'cell_area_sha256':rows[0]['definition']['cell_area_sha256'],
+        'code_sha256':_code_hashes(config)}
+    return {'destination':Path(resolve_paths(config)['dnn_training_inputs']),'signature':digest(definition),
+            'definition':definition,'prepared':prepared,'feature_spec':spec}
+
+
 def cached_inputs(resolved: dict) -> dict | None:
     directory = resolved['destination']
     if not directory.exists():
@@ -127,7 +176,7 @@ def cached_inputs(resolved: dict) -> dict | None:
     if manifest.get('definition') != resolved['definition']:
         raise ValueError(f'Training-input manifest definition changed: {directory}')
     expected = ['preprocessing.json'] + [
-        str(Path(f'Run{row["run"]}') / item['module'] / Path(item['file']).name)
+        str(index_path(row,item))
         for row in resolved['definition']['prepared'] for item in row['outputs']
         if item['module'] in row['modules']]
     outputs = manifest.get('outputs', [])
@@ -180,6 +229,10 @@ def _produce(config, resolved):
         for row in resolved['prepared']:
             base = row['resolved']
             run = base['job'].source.run
+            from utils.datasets import source_config
+            current=source_config(config,row)
+            defined=next(d for d in resolved['definition']['prepared'] if d['directory']==str(base['destination']))
+            stream=defined.get('stream_id',run)
             for info in base['files']:
                 for name in row['names']:
                     original = next(item for item in row['outputs'] if item['module'] == name
@@ -187,9 +240,9 @@ def _produce(config, resolved):
                     rdf = ROOT.RDataFrame('Events', root_path(str(base['destination'] / original['file'])))
                     ROOT.RDF.Experimental.AddProgressBar(ROOT.RDF.AsRNode(rdf))
                     input_count = rdf.Count()
-                    node = training_view(rdf, config, spec, name, dict(info, run=run), statistics_only=True)
+                    node = training_view(rdf, current, spec, name, dict(info, run=run), statistics_only=True)
                     stats_result = book_statistics(node, config, spec, name)
-                    relative = Path(f'Run{run}') / name / Path(original['file']).name
+                    relative = index_path(defined,original)
                     target = work / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     options = ROOT.RDF.RSnapshotOptions()
@@ -209,12 +262,13 @@ def _produce(config, resolved):
                         global_stats.merge(stats)
                     counts = _moments_to_counts(stats, spec['max_channels'])
                     by_run = counts_by_module_run.setdefault(name, {})
-                    if str(run) not in by_run:
-                        by_run[str(run)] = counts
+                    if str(stream) not in by_run:
+                        by_run[str(stream)] = counts
                     else:
                         for label in counts:
-                            by_run[str(run)][label] = [a+b for a,b in zip(by_run[str(run)][label], counts[label])]
-                    summary.append({'run': run, 'module': name, 'source_file_index': info['index'],
+                            by_run[str(stream)][label] = [a+b for a,b in zip(by_run[str(stream)][label], counts[label])]
+                    summary.append({'run': run, 'dataset_index':row.get('dataset_index',0),
+                                    'module': name, 'source_file_index': info['index'],
                                     'input_events': info['entries'],
                                     'eligible_events': [int(x) for x in stats.events],
                                     'retained_events': [int(x) for x in stats.kept_events],
@@ -244,6 +298,8 @@ def _produce(config, resolved):
                     'feature_spec': spec, 'preprocessing_sha256': _sha(work / 'preprocessing.json'),
                     'counts_by_module_run': counts_by_module_run, 'inverse_frequency_scales': scales,
                     'summary': summary, 'outputs': outputs}
+        if 'stream_table' in resolved['definition']:
+            manifest['stream_table']=resolved['definition']['stream_table']
         (work / 'manifest.json').write_text(json.dumps(manifest, indent=2, allow_nan=False) + '\n')
         if destination.exists():
             raise FileExistsError(f'Training-input destination appeared during production: {destination}')
@@ -258,7 +314,8 @@ def run(config: AnalysisConfig) -> None:
     if ROOT.IsImplicitMTEnabled():
         ROOT.DisableImplicitMT()
     ROOT.EnableImplicitMT(config.resources['cpus'])
-    print(f'Checking training-input provenance for {len(config.correction.dataset.sources)} derivation runs', flush=True)
+    from utils.datasets import recipes
+    print(f'Checking training-input provenance for {sum(len(r.dataset.sources) for r in recipes(config))} derivation runs', flush=True)
     resolved = resolve_inputs(config, register_modules=True)
     if cached_inputs(resolved) is not None:
         print(f'Reusing training inputs: {resolved["destination"]}', flush=True)

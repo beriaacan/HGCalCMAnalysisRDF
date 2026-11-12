@@ -1,0 +1,10 @@
+# Produce missing run-specific pedestals, derive both linear methods and train one combined DNN.
+analyses:
+  # Available goals: pedestals, prepare, training_inputs, analytic,
+  #   analytic_allinputs, training_cache, train, apply, plots, multimodule_plot, export.
+  - config: ../configs/cassette_118784_118787.yaml
+    steps: [plots, multimodule_plot]
+
+max_jobs: 4
+max_io_jobs: 2
+max_gpu_jobs: 2

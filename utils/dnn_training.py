@@ -18,7 +18,8 @@ SCHEMA = 'hgcal_cm_dnn_v4'
 ARTIFACTS = ('model.pt', 'last.pt', 'preprocessing.json', 'model_spec.json', 'history.json')
 CODE = ('train.py', 'utils/dnn_training.py', 'utils/dnn_batches.py',
         'utils/training.py', 'utils/training_helpers.hxx', 'utils/train_config.py',
-        'utils/dnn_prefetch.py', 'utils/dnn_tensors.py', 'utils/training_cache.py', 'utils/training_metadata.py', 'utils/preprocessing.py', 'utils/module_registry.py', 'utils/dnn_internal_normalization.py')
+        'utils/dnn_prefetch.py', 'utils/dnn_tensors.py', 'utils/training_cache.py', 'utils/training_metadata.py', 'utils/preprocessing.py', 'utils/module_registry.py', 'utils/dnn_internal_normalization.py',
+        'utils/model_compatibility.py','utils/datasets.py','utils/conditions.py')
 
 
 def _write_manifest(directory, record):
@@ -58,6 +59,8 @@ def definition(config, manifest, directory, modules):
         'code_sha256': scientific_code_hashes()}
     from .preprocessing import dnn_definition
     result['preprocessing'] = dnn_definition()
+    from .model_compatibility import request
+    result['application_source_request'] = request(config, group)
     result['dnn_internal_statistics'] = ('retained training event-target samples for this model group; '
         'own ADC replaced before moments; unweighted population variance; constants scale one; '
         'ADC/CM columns only; buffers stored in model state')
@@ -130,7 +133,7 @@ def save_checkpoint(path, payload):
         Path(name).unlink(missing_ok=True)
 
 
-def run_epoch(model, optimizer, data, device, training):
+def run_epoch(model, optimizer, data, device, training, *, dataset_totals=None):
     import torch
     def transfer(value):
         value=torch.as_tensor(value)
@@ -138,13 +141,21 @@ def run_epoch(model, optimizer, data, device, training):
     model.train(training)
     loss_sum = 0.
     samples = 0
+    by_dataset={}
     with torch.set_grad_enabled(training):
-        for x, y, w in data:
+        for batch in data:
+            x,y,w=batch[:3]
             x, y, w = (transfer(value) for value in (x,y,w))
             if training:
                 optimizer.zero_grad(set_to_none=True)
             prediction = model(x).squeeze(-1)
             loss = torch.mean(w * (prediction - y).square())
+            if dataset_totals is not None:
+                ids=transfer(batch[3])
+                for index in torch.unique(ids).tolist():
+                    mask=ids==index
+                    total,count=by_dataset.get(index,(torch.zeros((),device=device),torch.zeros((),dtype=torch.int64,device=device)))
+                    by_dataset[index]=(total+(w[mask]*(prediction[mask]-y[mask]).square()).detach().sum(),count+mask.sum())
             if not bool(torch.isfinite(loss)):
                 raise ValueError('Nonfinite DNN loss')
             if training:
@@ -158,6 +169,9 @@ def run_epoch(model, optimizer, data, device, training):
             loss_sum += float(loss.detach()) * len(y)
     if not samples:
         raise ValueError('No retained samples in DNN partition')
+    if dataset_totals is not None:
+        dataset_totals.update({str(index):{'mse':float(total)/int(count),'samples':int(count)}
+                               for index,(total,count) in by_dataset.items()})
     return loss_sum / samples, samples
 
 
@@ -166,7 +180,7 @@ def write_curves(config, target, history):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     # Training figures describe the derivation, independent of application cuts.
-    base = ROOT_DIR / 'plots' / config.correction.campaign / 'training'
+    base = ROOT_DIR / 'plots' / ('joint' if config.derivations else config.correction.campaign) / 'training'
     setup = base / config.model_dir.name
     folder = setup / target.parent.name / target.name
     folder.mkdir(parents=True, exist_ok=True)
@@ -240,7 +254,8 @@ def train_group(config, manifest, input_dir, preprocessing, group, modules, *, b
     except FileExistsError:
         raise ValueError(training_lock_message(lock)) from None
     try:
-        (lock / 'owner.json').write_text(json.dumps({'host': socket.gethostname(), 'pid': os.getpid()}))
+        from utils.workflow_registry import record_lock_owner
+        record_lock_owner(lock, {'host': socket.gethostname(), 'pid': os.getpid()})
         return _train_locked(config, manifest, preprocessing, group, modules, target, expected,
                              batches if batch_factory is None else batch_factory,
                              compact_factory=compact_event_batches if batch_factory is None else None,
@@ -262,7 +277,19 @@ def run_partition(config,manifest,preprocessing,modules,partition,epoch,group,mo
         if expander is not None:data=(expander.expand(payload) for payload in data)
         progress=report_batches(data,sample_total(manifest,modules,partition),
             f'{group} epoch {epoch+1}/{config.dnn["epochs"]} {("training","validation")[partition]}')
-        return run_epoch(model,optimizer,progress,device,partition==0)
+        totals={} if 'stream_table' in manifest and partition==1 else None
+        loss,count=run_epoch(model,optimizer,progress,device,partition==0,dataset_totals=totals)
+        if totals is not None:
+            expected={}
+            for source,metadata in manifest['stream_table'].items():
+                index=str(metadata['dataset_index'])
+                expected[index]=expected.get(index,0)+sum(sum(manifest['counts_by_module_run'][name].get(source,{}).get('validation',[])) for name in modules)
+            if {key:value['samples'] for key,value in totals.items()}!={k:v for k,v in expected.items() if v}:
+                raise ValueError('Per-dataset validation counts differ from the signed training population')
+            labelled={f'dataset{index}_{manifest["definition"]["datasets"][int(index)]["campaign"]}':value
+                      for index,value in totals.items()}
+            return loss,count,labelled
+        return loss,count
 
 
 def _train_locked(config, manifest, preprocessing, group, modules, target, expected, factory, *, compact_factory=None, event_cache=None):
@@ -379,10 +406,14 @@ def _train_locked(config, manifest, preprocessing, group, modules, target, expec
             return run_partition(config,manifest,preprocessing,modules,partition,epoch,group,model,optimizer,device,
                 factory=compact_factory if use_compact else factory,expander=expanders.get(partition))
         train_loss, nt = partition_loss(0)
-        val_loss, nv = partition_loss(1)
+        validation = partition_loss(1)
+        val_loss,nv=validation[:2]
         scheduler.step(val_loss)
         history.append({'epoch': epoch + 1, 'train_loss': train_loss, 'validation_loss': val_loss,
             'learning_rate': lr, 'train_samples': nt, 'validation_samples': nv, 'seconds': time.monotonic() - t0})
+        if len(validation)==3:
+            history[-1]['validation_by_dataset']=validation[2]
+            print('Validation by source dataset: '+json.dumps(validation[2]),flush=True)
         if val_loss < best:
             best = val_loss
             best_checkpoint = {'schema': SCHEMA, 'signature': signature(expected), 'epoch': epoch + 1,

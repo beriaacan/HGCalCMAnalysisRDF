@@ -47,6 +47,16 @@ inline RVec<float> expand_cm(const RVec<float>& cm) {
   for (size_t ch = 0; ch < output.size(); ++ch) output[ch] = cm[ch/37];
   return output;
 }
+inline RVec<float> mask_absent(RVec<float> values, const RVec<float>& absent) {
+  if (values.size()!=37*absent.size()) throw std::runtime_error("Absent eRx mask size mismatch");
+  for (size_t ch=0; ch<values.size(); ++ch) if (absent[ch/37]) values[ch]=missing();
+  return values;
+}
+inline unsigned count_finite(const RVec<float>& values) {
+  unsigned result=0;
+  for (auto value:values) if (std::isfinite(value)) ++result;
+  return result;
+}
 inline double sum_finite(const RVec<float>& values) {
   double total = 0.;
   for (auto value : values) if (std::isfinite(value)) total += value;

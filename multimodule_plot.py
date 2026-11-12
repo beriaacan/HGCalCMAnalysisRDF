@@ -8,8 +8,9 @@ from utils.paths import resolve_paths, application_plot_directory
 
 
 def destination(config):
+    from utils.datasets import calibration_label
     return application_plot_directory(config, Path(resolve_paths(config)['target']['plots'])/'multimodule'/
-            f'pedestals_from_Run{config.target.pedestal.run}'/config.model_dir.name/config.target.selection)
+            (calibration_label(config.target) if config.target.conditions else f'pedestals_from_Run{config.target.pedestal.run}')/config.model_dir.name/config.target.selection)
 
 
 def describe(config):

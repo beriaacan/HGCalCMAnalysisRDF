@@ -5,6 +5,7 @@ from functools import lru_cache
 import glob
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,27 +52,39 @@ def inventory(source):
                        'mtime_ns': Path(path).stat().st_mtime_ns} for path in paths]}
 
 
-def preparation_recipe(source, campaign, pedestal_run, calibration, locator, thresholds):
+def preparation_recipe(source, campaign, pedestal_run, calibration, locator, thresholds, conditions=None, cell_areas=None):
     central = ROOT.parents[1]/'LocalCalibration/python/DigiAnalysisUtils.py'
-    return {'format': FORMAT, 'campaign': campaign, 'source': inventory(source),
+    result = {'format': FORMAT, 'campaign': campaign, 'source': inventory(source),
             'pedestal_run': pedestal_run, 'calibration': file_identity(calibration),
             'module_map': file_identity(locator), 'activity_thresholds': list(thresholds),
             'code': code_identity(('prepare.py', 'utils/prepared.py', 'utils/prepare_rdf.py',
-                                   'utils/prepare_helpers.hxx', 'utils/nano.py', 'utils/identity.py')),
+                                   'utils/prepare_helpers.hxx', 'utils/nano.py', 'utils/identity.py',
+                                   'utils/preprocessing.py','utils/datasets.py','utils/conditions.py')),
             'central_selection': file_identity(central)}
+    if conditions:
+        result['conditions']=conditions
+    if cell_areas is not None:
+        result['cell_areas']=file_identity(cell_areas)
+    return result
 
 
 def population(config, *, target=False):
+    if not target and config.derivations:
+        from .datasets import recipes, single
+        return {'datasets':[population(single(config,row)) for row in recipes(config)]}
     recipe = config.target if target else config.correction
     out = {'format': FORMAT, 'campaign': recipe.campaign,
            'sources': [preparation_recipe(source, recipe.campaign, recipe.pedestal.run,
                        recipe.calibration_file, recipe.module_map,
-                       config.preparation['activity_thresholds']) for source in recipe.dataset.sources],
+                       config.preparation['activity_thresholds'],recipe.conditions,
+                       config.dnn['cell_area_file']) for source in recipe.dataset.sources],
            'calibration': file_identity(recipe.calibration_file),
            'module_map': file_identity(recipe.module_map), 'pedestal_run': recipe.pedestal.run,
            'selection': recipe.selection, 'trigger_time_window': recipe.trigger_time_window,
            'adc_min': recipe.dataset.adcmin, 'adc_max': recipe.dataset.adcmax,
            'activity_thresholds': config.preparation['activity_thresholds']}
+    if recipe.conditions:
+        out['conditions']=recipe.conditions
     if not target:
         out['modules'] = recipe.modules
         out['split'] = {key: config.dnn[key] for key in ('split_seed', 'validation_split_fraction',
@@ -86,6 +99,9 @@ def selected_module_ids(config):
     path = config.dnn['module_registry_file']
     registry = json.loads(path.read_text()).get('modules', {}) if path.is_file() else {}
     selected = config.correction.modules
+    if config.derivations:
+        from .prepared import derivation_modules
+        selected=derivation_modules(config)
     if not isinstance(selected, str):
         return {name: registry.get(name) for name in selected}
     # A selector's exact observed inventory is signed during preparation. The
@@ -103,7 +119,7 @@ def input_recipe(config):
                          'preprocess_targets', 'input_features', 'max_channels', 'missing_input_value')},
             'cell_areas': file_identity(config.dnn['cell_area_file']),
             'code': code_identity(('training_inputs.py', 'utils/training.py', 'utils/training_helpers.hxx',
-                    'utils/preprocessing.py', 'utils/module_registry.py', 'utils/prepare_rdf.py',
+                    'utils/preprocessing.py', 'utils/module_registry.py', 'utils/datasets.py', 'utils/conditions.py', 'utils/prepare_rdf.py',
                     'utils/prepare_helpers.hxx', 'utils/identity.py'))}
 
 
@@ -130,12 +146,16 @@ def model_recipe(config, group):
     return {'inputs': input_recipe(config), 'group': group, 'preprocessing': dnn_definition(),
             'dnn': {key: config.dnn[key] for key in dnn_keys},
             'training': {key: config.training[key] for key in training_keys},
-            'runtime': file_identity(config.training['training_environment']/'runtime.json'),
+            'runtime': {'manifest':file_identity(config.training['training_environment']/'runtime.json'),
+                'python_environment':file_identity(config.training['training_environment']/'pyvenv.cfg'),
+                'torch_build':file_identity(config.training['training_environment']/
+                    f'lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages/torch/version.py')},
             'code': code_identity(('train.py', 'utils/dnn_training.py', 'utils/dnn_batches.py',
                 'utils/dnn_prefetch.py', 'utils/dnn_tensors.py', 'utils/training_cache.py',
                 'utils/dnn_internal_normalization.py', 'utils/training_metadata.py', 'utils/identity.py',
                 'utils/training.py', 'utils/training_helpers.hxx', 'utils/train_config.py',
-                'utils/dnn_provenance.py', 'utils/training_progress.py', 'utils/training_runtime.py'))}
+                'utils/dnn_provenance.py', 'utils/training_progress.py', 'utils/training_runtime.py',
+                'utils/model_compatibility.py','utils/datasets.py','utils/conditions.py'))}
 
 
 def model_id(config, group='combined'):
@@ -148,6 +168,15 @@ def model_directory(config, group='combined'):
 
 def data_id(training_recipe, modules):
     """Full, automatic physical population identity, independent of DNN architecture."""
+    if training_recipe.get('datasets'):
+        population={'datasets':training_recipe['datasets'],'modules':list(modules),
+                    'split':training_recipe['options'],'split_identity':training_recipe['split_identity'],
+                    'prepared':[{k:row['preparation_definition'][k] for k in
+                        ('campaign','run','files','pedestal_run','calibration_sha256','module_map_sha256','activity_thresholds')}
+                        | {'dataset_index':row['dataset_index'],
+                           'conditions':row['preparation_definition'].get('conditions')}
+                        for row in training_recipe['prepared']]}
+        return digest(population)
     population = {key: training_recipe[key] for key in ('campaign', 'selection',
                   'trigger_time_window', 'adc_min', 'adc_max', 'split_identity')}
     population['split'] = {key: training_recipe['options'][key] for key in

@@ -74,13 +74,34 @@ def owner_at(lock):
     return json.loads(path.read_text())
 
 
+def lock_context(record):
+    return {'token': record['token'], 'workflow_id': record['workflow_id'],
+            'work': record['work'], 'node': record['node'],
+            'scheduler': record['scheduler'],
+            'lock_catalog': str(Path(record['receipt']).parents[1]/'lock_catalog')}
+
+
+def record_lock_owner(lock, owner):
+    """Publish normal ownership plus a persistent central index for recovery."""
+    context = json.loads(os.environ.get('HGCAL_LOCK_CONTEXT', '{}'))
+    owner = {**context, **owner}
+    if not owner.get('token'):
+        token = os.environ.get('HGCAL_LOCAL_WRITER_TOKEN')
+        owner['token'] = token or f'local-{owner.get("host")}-{owner.get("pid")}'
+    atomic_json(Path(lock)/'owner.json', owner)
+    catalog = Path(owner.get('lock_catalog') or
+                   Path(__file__).resolve().parents[1]/'.workflow_state'/'lock_catalog')
+    path = str(Path(lock).resolve())
+    atomic_json(catalog/(digest(path)+'.json'), {'path': path, 'owner': owner})
+
+
 def describe_owner(lock, owner):
     return (f'Writer lock DIRECTORY exists: {lock}\n'
             f'Owner: {owner.get("status", "unknown")}, host={owner.get("host", "unknown")}, '
             f'pid={owner.get("pid", "unknown")}, job={owner.get("job_id", "not recorded")}, '
             f'workflow={owner.get("work", "local command")}, node={owner.get("node", "local")}. '
             'This is an ownership directory, not a running process. If its owner has stopped, '
-            'use workflow.py --release <submission-directory> --node <node> --owner-stopped '
+            'use workflow.py --clear-locks to inspect stopped-owner cleanup, or --release <submission-directory> --node <node> --owner-stopped '
             'for a workflow lock; verify a local owner before removing its stale directory.')
 
 
@@ -98,7 +119,7 @@ def claim(locks, owner):
                     continue
                 return False, (str(lock), previous)
             acquired.append(lock)
-            atomic_json(lock/'owner.json', owner)
+            record_lock_owner(lock, owner)
         acquired.clear()  # Ownership now belongs to caller, including inherited locks.
         return True, None
     finally:
@@ -113,7 +134,7 @@ def update(locks, owner):
         lock = Path(value)
         if owner_at(lock).get('token') != owner['token']:
             raise RuntimeError(f'Writer ownership changed: {lock}')
-        atomic_json(lock/'owner.json', owner)
+        record_lock_owner(lock, owner)
 
 
 def release(locks, token):
@@ -186,7 +207,7 @@ def pre(record):
         raise ValueError('A product verified complete during planning changed. Prepare a new workflow; dependencies were pruned.')
     owner = {'token': record['token'], 'work': record['work'], 'node': record['node'],
              'status': 'queued', 'host': socket.gethostname(), 'pid': None, 'updated': stamp(),
-             'state_file': record['state_file']}
+             'state_file': record['state_file'], **lock_context(record)}
     ok, busy = claim(record['registry_locks'], owner)
     if not ok:
         lock, other = busy

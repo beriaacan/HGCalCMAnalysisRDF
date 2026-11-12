@@ -7,7 +7,7 @@ from .calibrations import default_calibration_file
 FRAMEWORK_ROOT=Path(__file__).resolve().parents[1]
 PACKAGE_ROOT=FRAMEWORK_ROOT.parents[1]
 REQUIRED=frozenset({'output_dir','derivation','application'})
-DATA_REQUIRED=frozenset({'campaign','runs','pedestal_run'})
+DATA_REQUIRED=frozenset({'campaign','runs'})
 CAMPAIGN_PATHS = {'Jun2026TB': ('/eos/cms/store/group/dpg_hgcal/tb_hgcal/2026/TestBeam',
                'Calibrations/TB2026/maps/modulelocator_v4.txt',
                'Calibrations/TB2026/calib'),
@@ -112,6 +112,8 @@ DEFAULTS = {'steps': ['prepare'],
  'multimodule_closure_range': [-0.1, 0.1]}
 
 DATA_DEFAULTS = {'modules': 'all',
+ 'pedestal_run': None,
+ 'conditions': None,
  'nano_root': None,
  'nano_production': None,
  'input_pattern': None,
@@ -157,9 +159,12 @@ def _block(role,written,base,local_path):
     campaign=written['campaign']
     if not isinstance(campaign,str) or campaign not in CAMPAIGN_PATHS:
         raise ValueError(f'{role}.campaign must be Jun2026TB or Cassette')
-    run=written['pedestal_run']
-    if type(run) is not int or run<=0:
-        raise ValueError(f'{role}.pedestal_run must be a positive integer')
+    run=written.get('pedestal_run')
+    if written.get('conditions') is None:
+        if type(run) is not int or run<=0:
+            raise ValueError(f'{role}.pedestal_run must be a positive integer')
+    elif run is not None:
+        raise ValueError(f'{role}: choose conditions or pedestal_run; an IOV is not a pedestal acquisition run')
     nano_root,locator,calibrations=CAMPAIGN_PATHS[campaign]
     row=deepcopy(DATA_DEFAULTS)
     row.update(deepcopy(DERIVATION_DEFAULTS if role=='derivation' else APPLICATION_DEFAULTS))
@@ -185,14 +190,24 @@ def _block(role,written,base,local_path):
     else:
         row['pedestal_input_pattern']=(pattern(row['pedestal_nano_production'])
             if row['pedestal_nano_production'] is not None else row['input_pattern'])
-    row['module_map']=str(local_path(row['module_map'] if row['module_map'] is not None
-                                    else str(PACKAGE_ROOT/locator),base,f'{role}.module_map'))
     calibration=row['calibration_file']
+    if row['conditions'] is not None:
+        from .conditions import resolve
+        record,calibration,locator_file=resolve(row['conditions'],
+            local_path(calibration,base,f'{role}.calibration_file') if calibration is not None else None,
+            local_path(row['module_map'],base,f'{role}.module_map') if row['module_map'] is not None else None,
+            PACKAGE_ROOT,campaign,row['runs'] if isinstance(row['runs'],list) else [row['runs']])
+        row.update(conditions=record,module_map=locator_file)
+    else:
+        row['module_map']=str(local_path(row['module_map'] if row['module_map'] is not None
+                                        else str(PACKAGE_ROOT/locator),base,f'{role}.module_map'))
     if calibration is None:
         calibration=str(default_calibration_file(PACKAGE_ROOT/calibrations,
             FRAMEWORK_ROOT/'calibrations'/campaign,run))
     row['calibration_file']=str(local_path(calibration,base,f'{role}.calibration_file'))
-    nullable={'nano_production','pedestal_nano_production','adc_min','adc_max'}
+    nullable={'nano_production','pedestal_nano_production','adc_min','adc_max','conditions'}
+    if row['conditions'] is not None:
+        nullable.add('pedestal_run')
     nulls=[key for key,value in row.items() if value is None and key not in nullable]
     if nulls:
         raise ValueError(f'{role}: these settings cannot be null: {sorted(nulls)}')
@@ -207,10 +222,23 @@ def complete_settings(written,base,local_path):
     if missing:
         raise ValueError(f'Missing required settings: {sorted(missing)}')
     result=deepcopy(DEFAULTS);result.update(written)
-    result['derivation']=_block('derivation',written['derivation'],base,local_path)
+    derivation=written['derivation']
+    if isinstance(derivation,dict) and 'datasets' in derivation:
+        if set(derivation) != {'datasets'} or not isinstance(derivation['datasets'],list) or not derivation['datasets']:
+            raise ValueError('derivation.datasets must be a nonempty list; put source settings inside each dataset')
+        result['derivation']={'datasets':[_block('derivation',row,base,local_path) for row in derivation['datasets']]}
+        if result['training_grouping']!='combined' or result['sample_weighting']!='none':
+            raise ValueError('Multi-dataset derivation requires combined training and sample_weighting: none')
+        campaigns={row['campaign'] for row in result['derivation']['datasets']}
+        if len(campaigns)>1 and set(result['methods'])-{'uncorrected','dnn'}:
+            raise ValueError('Cross-campaign derivation supports methods: [uncorrected, dnn]; linear pooling requires one campaign')
+        source_campaign=next(iter(campaigns)) if len(campaigns)==1 else 'joint'
+    else:
+        result['derivation']=_block('derivation',derivation,base,local_path)
+        source_campaign=result['derivation']['campaign']
     result['application']=_block('application',written['application'],base,local_path)
     output=local_path(written['output_dir'],base,'output_dir');result['output_dir']=str(output)
-    paths={'model_dir':output/'models'/result['derivation']['campaign'],
+    paths={'model_dir':output/'models'/source_campaign,
            'cell_area_file':PACKAGE_ROOT/'LocalCalibration/data/cellareas.json',
            'module_registry_file':FRAMEWORK_ROOT/'data/module_registry.json',
            'training_environment':FRAMEWORK_ROOT/'.venv_training',

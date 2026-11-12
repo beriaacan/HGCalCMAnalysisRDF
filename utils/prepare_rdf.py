@@ -23,11 +23,14 @@ def initialize_root():
     return ROOT
 
 
-def _vector(values) -> str:
-    if any(not math.isfinite(float(v)) for v in values):
+def _vector(values, *, allow_missing=False) -> str:
+    if any(not math.isfinite(float(v)) and not (allow_missing and math.isnan(float(v))) for v in values):
         raise ValueError('Non-finite calibration constant')
     literals = []
     for value in values:
+        if allow_missing and math.isnan(float(value)):
+            literals.append('std::numeric_limits<float>::quiet_NaN()')
+            continue
         token = f'{float(value):.17g}'
         if '.' not in token and 'e' not in token:
             token += '.0'
@@ -41,7 +44,7 @@ def threshold_label(value: float) -> str:
 
 
 def module_columns(rdf, name: str, identity: tuple[int, int, int], calibration: dict,
-                   activity_thresholds: tuple[float, ...]):
+                   activity_thresholds: tuple[float, ...], absent=None):
     """Keep every source event; unavailable channel values remain NaN."""
     initialize_root()
     from HGCalCommissioning.LocalCalibration import DigiAnalysisUtils as central
@@ -72,6 +75,13 @@ def module_columns(rdf, name: str, identity: tuple[int, int, int], calibration: 
     rdf = rdf.Define('cm_erx', f'hgcal_cm_prepare::erx_cm(module_channels,HGCDigi_cm[modulemask],{nerx})')
     rdf = rdf.Define('cm_raw', 'hgcal_cm_prepare::expand_cm(cm_erx)')
     rdf = rdf.Define('adc_pedsub', f'static const auto ped = {_vector(calibration["ADC_ped"])}; return adc_raw - ped;')
+    if absent and any(absent):
+        mask=_vector([float(flag) for flag in absent])
+        rdf=rdf.Redefine('adc_pedsub',f'hgcal_cm_prepare::mask_absent(adc_pedsub,{mask})')
+        for column in ('tot_raw','toa_raw'):
+            rdf=rdf.Redefine(column,f'hgcal_cm_prepare::mask_absent({column},{mask})')
+        rdf=rdf.Redefine('nchtot','hgcal_cm_prepare::count_finite(tot_raw)')
+        rdf=rdf.Redefine('nchtoa','hgcal_cm_prepare::count_finite(toa_raw)')
     rdf = rdf.Define('cm_pedsub', f'static const auto ped = {_vector(calibration["CM_ped"])}; return cm_raw - ped;')
     columns += ['cm_erx', 'cm_raw', 'adc_pedsub', 'cm_pedsub']
     for output, expression in (

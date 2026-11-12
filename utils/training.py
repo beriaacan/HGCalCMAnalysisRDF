@@ -103,7 +103,7 @@ def make_feature_spec(config, modules: dict) -> dict:
     # Both regressions and the DNN use the same calibration-defined CM reference.
     if 'cm_erx' in global_groups:
         for name, meta in geometries.items():
-            reference_from_file(config.correction.calibration_file, name, meta['nch'])
+            reference_from_file(config.correction.calibration_file, name, meta['nch'],meta['cell_area_fraction'])
     return result
 
 
@@ -117,8 +117,8 @@ def global_expression(config, spec: dict, module: str, *, recipe=None) -> str:
         if spec.get('cm_convention') != CENTERED_CM:
             raise ValueError('CM features must use the calibration-centered convention; regenerate linear inputs/predictors')
         from .prepare_rdf import _vector
-        reference = reference_from_file((recipe or config.correction).calibration_file, module, meta['nch'])
-        statements.append(f'static const auto cm_reference = {_vector(reference)};')
+        reference = reference_from_file((recipe or config.correction).calibration_file, module, meta['nch'],meta['cell_area_fraction'])
+        statements.append(f'static const auto cm_reference = {_vector(reference,allow_missing=True)};')
         cm = '(cm_erx - cm_reference)'
 
     for group in spec['global_groups']:

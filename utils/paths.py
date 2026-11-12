@@ -32,10 +32,11 @@ def discover_files(dataset: Dataset) -> tuple[str, ...]:
 def resolve_paths(config: AnalysisConfig) -> dict:
     """Resolve shared artifacts and the distinct correction/target datasets."""
     from .identity import input_id, linear_id, population, variant
+    from .datasets import calibration_label
     correction = config.correction
     target = config.target
     evaluation = (config.output_dir / target.campaign / "evaluation" / str(target.dataset.run)
-                  / f"pedestals_{target.pedestal.run}" / target.selection / config.model_dir.name / variant(population(config, target=True)))
+                  / calibration_label(target) / target.selection / config.model_dir.name / variant(population(config, target=True)))
 
     def dataset_paths(recipe: DatasetConfig, diagnostics: Path) -> dict:
         campaign_root = config.output_dir / recipe.campaign
@@ -52,9 +53,11 @@ def resolve_paths(config: AnalysisConfig) -> dict:
         }
 
     training = (config.output_dir / correction.campaign / "training"
-                / str(correction.dataset.run) / f"pedestals_{correction.pedestal.run}"
+                / str(correction.dataset.run) / calibration_label(correction)
                 / correction.selection)
     training /= input_id(config)
+    if config.derivations:
+        training=config.output_dir/'joint'/'training'/input_id(config)
     # Both estimators share membership/count files; feature views live in metadata.
     return {
         "output_root": str(config.output_dir),
@@ -81,6 +84,7 @@ def application_plot_directory(config: AnalysisConfig, directory: Path) -> Path:
 
 def module_plot_directory(config: AnalysisConfig, module: str) -> Path:
     """Local plots follow the reference campaign/run/module/calibration layout."""
+    from .datasets import calibration_label
     return application_plot_directory(config, Path(resolve_paths(config)["target"]["plots"]) / module
-            / f"pedestals_from_Run{config.target.pedestal.run}"
+            / (calibration_label(config.target) if config.target.conditions else f"pedestals_from_Run{config.target.pedestal.run}")
             / config.model_dir.name / config.target.selection)

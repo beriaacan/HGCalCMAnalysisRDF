@@ -13,6 +13,8 @@ from .training import (initialize_training_root,global_expression,source_salt,
 
 def source_chunks(config,manifest,module,path,source,partition, *, include_entries=False):
     """Use ROOT's unfiltered loader; filtered vector loading is broken in 6.36."""
+    from .datasets import source_config,stream_id
+    config=source_config(config,source)
     ROOT=initialize_training_root()
     from ROOT._pythonization._tmva._batchgenerator import CreateNumPyGenerators
     spec=manifest['feature_spec'];meta=spec['modules'][module]
@@ -53,7 +55,7 @@ def source_chunks(config,manifest,module,path,source,partition, *, include_entri
         targets=chosen[:,spec['global_size']:spec['global_size']+meta['nch']]
         valid=np.isfinite(targets).any(axis=1)
         if valid.any():
-            result=(module,source['run'],features[valid],targets[valid])
+            result=(module,stream_id(source),features[valid],targets[valid])
             if include_entries:
                 start=spec['global_size']+meta['nch']
                 pieces=chosen[valid,start:start+4].astype(np.uint64)
@@ -103,7 +105,8 @@ def event_chunks(config,manifest,modules,partition,rng, *, chunk_reader=None):
     counts={}
     for module,path,source in sources:
         for chunk in reader(config,manifest,module,path,source,partition):
-            key=(module,source['run'])
+            from .datasets import stream_id
+            key=(module,stream_id(source))
             count=np.isfinite(chunk[3]).sum(axis=0)
             counts[key]=counts.get(key,np.zeros_like(count))+count
             yield chunk
@@ -168,7 +171,13 @@ def expand_buffer(config,manifest,preprocessing,chunks,partition,rng):
             values[offset:offset+len(cc)]=batch['targets']
             offset+=len(cc)
         if offset!=samples: raise RuntimeError('Full-event batch expansion lost channel targets')
-        yield inputs,values,weights
+        if 'stream_table' in manifest and partition==1:
+            mapping={int(k):v['dataset_index'] for k,v in manifest['stream_table'].items()}
+            rr,_cc=np.nonzero(np.isfinite(selected_targets))
+            datasets=np.asarray([mapping[int(run)] for run in runs[events[rr]]],dtype=np.int64)
+            yield inputs,values,weights,datasets
+        else:
+            yield inputs,values,weights
         del inputs,values,weights
 
 

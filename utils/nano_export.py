@@ -206,13 +206,14 @@ def compute(config, unit, work, selected):
             for method in selected:
                 item = info['corrections'][method]
                 writer.add(method, name, fed, sequence, info['nch'], root_path(item['path']), item['selected_events'])
-        node = ROOT.RDataFrame('Events', root_path(source['path']))
-        node = central.addStandardADCSelection(node, nofilter=True)
-        node = node.Define('hgcal_export_payload', 'hgcal_cm_export::Payload{ULong64_t(rdfentry_),ULong64_t(event),'
-            'hgcal_cm_export::copy_unsigned(HGCDigi_fedId),hgcal_cm_export::copy_unsigned(HGCDigi_fedReadoutSeq),'
-            'hgcal_cm_export::copy_unsigned(HGCDigi_channel),hgcal_cm_export::copy_unsigned(HGCDigi_adc),'
-            'hgcal_cm_export::copy_unsigned(good_digiadc)}')
-        writer.consume(ROOT.RDF.AsRNode(node))
+        if source['entries']:
+            node = ROOT.RDataFrame('Events', root_path(source['path']))
+            node = central.addStandardADCSelection(node, nofilter=True)
+            node = node.Define('hgcal_export_payload', 'hgcal_cm_export::Payload{ULong64_t(rdfentry_),ULong64_t(event),'
+                'hgcal_cm_export::copy_unsigned(HGCDigi_fedId),hgcal_cm_export::copy_unsigned(HGCDigi_fedReadoutSeq),'
+                'hgcal_cm_export::copy_unsigned(HGCDigi_channel),hgcal_cm_export::copy_unsigned(HGCDigi_adc),'
+                'hgcal_cm_export::copy_unsigned(good_digiadc)}')
+            writer.consume(ROOT.RDF.AsRNode(node))
         provenance = {'schema': SCHEMA, 'signature': signature(unit['definition']), 'definition': unit['definition']}
         writer.finish(json.dumps(provenance, sort_keys=True, allow_nan=False))
         summary = {'events': int(writer.events), 'valid_digis': {m: int(writer.valid(m)) for m in selected}}
@@ -261,7 +262,8 @@ def run(config):
                              'verify its recorded owner before cleanup') from None
         work = None
         try:
-            (lock/'owner.json').write_text(json.dumps({'host': socket.gethostname(), 'pid': os.getpid()}))
+            from utils.workflow_registry import record_lock_owner
+            record_lock_owner(lock, {'host': socket.gethostname(), 'pid': os.getpid()})
             current = cached_unit(directory, unit['definition'])
             if current is not None:
                 records[key] = current

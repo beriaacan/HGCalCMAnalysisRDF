@@ -10,14 +10,14 @@ from .analytic_artifacts import sha, signature
 
 def model_directory(config,module):
     """Only the complete derivation/training recipe selects the source model."""
-    from .identity import model_directory as automatic_directory
+    from .model_compatibility import find
     group='combined'
     if config.training['training_grouping']=='per_module':
         from .prepared import derivation_modules
         if module not in derivation_modules(config):
             raise ValueError(f'No per-module DNN is derived for {module}; use combined training for cross-module transfer')
         group=module
-    return automatic_directory(config,group)
+    return find(config,group)
 
 
 def read_model(folder):
@@ -141,9 +141,12 @@ def resolve_application(config):
                     'output_file': str(Path(f'Run{job.source.run}')/Path(original['file']).name)})
     if not metadata:
         raise ValueError('No application modules selected')
-    models, modules, specs = {}, {}, {}
+    models, modules, specs, folders = {}, {}, {}, {}
     for name, inputs in sources.items():
-        folder = model_directory(config, name)
+        label='combined' if config.training['training_grouping']=='combined' else name
+        if label not in folders:
+            folders[label]=model_directory(config,name)
+        folder=folders[label]
         group = str(folder)
         if group not in models:
             models[group] = read_model(folder)
@@ -169,7 +172,7 @@ def resolve_application(config):
     recipe = config.target
     definition = {'schema': SCHEMA, 'method': 'dnn',
         'target': {'campaign': recipe.campaign, 'runs': [s.run for s in recipe.dataset.sources],
-            'pedestal_run': recipe.pedestal.run, 'selection': recipe.selection,
+            'pedestal_run': recipe.pedestal.run, 'conditions':recipe.conditions,'selection': recipe.selection,
             'trigger_time_window': recipe.trigger_time_window, 'adc_min': recipe.dataset.adcmin, 'adc_max': recipe.dataset.adcmax},
         'allow_unknown_modules': config.dnn['allow_unknown_modules'],
         'modules': {name: row['definition'] for name, row in modules.items()}, 'tree': TREE, 'columns': COLUMNS,

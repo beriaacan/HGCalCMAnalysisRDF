@@ -11,7 +11,7 @@ from utils.prepared import (cached_files, describe, plan, resolve, common_defini
                             module_definition, module_record)
 from utils.analytic_artifacts import signature
 from analytic_allinputs import _write_manifest
-from utils.nano import root_path
+from utils.nano import root_path, empty_dataframe
 from utils.prepare_rdf import initialize_root, module_columns
 
 
@@ -33,7 +33,11 @@ def _produce(config: AnalysisConfig, resolved: dict) -> None:
     job = resolved['job']
     print(f'Preparing Run{job.source.run}: {len(missing)} modules -> {destination}', flush=True)
     for info in resolved['files']:
-        rdf = ROOT.RDataFrame('Events', root_path(info['path']))
+        if info['entries']:
+            rdf = ROOT.RDataFrame('Events', root_path(info['path']))
+        else:
+            print(f'Preserving empty source file: {info["path"]}', flush=True)
+            rdf = empty_dataframe(ROOT, trigger_valid=info['has_trigger_valid'])
         rdf = rdf.Define('source_run', f'unsigned({job.source.run})')
         rdf = rdf.Define('source_file_index', str(info['index']))
         rdf = rdf.Define('source_entry', 'ULong64_t(rdfentry_)')
@@ -46,11 +50,12 @@ def _produce(config: AnalysisConfig, resolved: dict) -> None:
         if info['has_trigger_valid']:
             rdf = rdf.Alias('trig_valid', 'HGCMetaData_trigValid')
             base_columns.append('trig_valid')
-        ROOT.RDF.Experimental.AddProgressBar(ROOT.RDF.AsRNode(rdf))
+        if info['entries']:
+            ROOT.RDF.Experimental.AddProgressBar(ROOT.RDF.AsRNode(rdf))
         snapshots = []
         for name, metadata in missing.items():
             node, columns = module_columns(rdf, name, metadata['identity'], metadata['calibration'],
-                                           config.preparation['activity_thresholds'])
+                                           config.preparation['activity_thresholds'],metadata['absent_erx'])
             relative = Path(name) / Path(info['path']).name
             target = work / relative
             target.parent.mkdir(exist_ok=True)
@@ -106,7 +111,8 @@ def run(config: AnalysisConfig) -> None:
             except FileExistsError:
                 raise ValueError(f'Preparation lock DIRECTORY exists: {lock}; verify its recorded owner before cleanup') from None
             try:
-                (lock/'owner.json').write_text(json.dumps({'host': socket.gethostname(), 'pid': os.getpid()}))
+                from utils.workflow_registry import record_lock_owner
+                record_lock_owner(lock, {'host': socket.gethostname(), 'pid': os.getpid()})
                 if cached_files(resolved) is None:
                     _produce(config, resolved)
             finally:

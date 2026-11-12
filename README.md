@@ -122,6 +122,7 @@ options use those defaults; unknown and duplicate keys are errors.
 | `modules` | Ordered names, `all`, `ld` or `hd`. Derivation chooses training/linear modules. Application `all` means exactly the derivation set; lists or `ld`/`hd` can select another target set. |
 | `nano_production` | Production directory below `Run<run>`. Pin it explicitly; a glob such as `'*'` is accepted only if exactly one production matches per run. |
 | `pedestal_run` | Calibration source run, independently chosen for derivation and application. |
+| `conditions` | Alternative to `pedestal_run`: `{era: P5/v27, run: 22000077}` selects central era/run-valid calibration and geometry. Use one run per block; resolved files are frozen for batch execution. |
 | `selection` | `full` or `trigtime`. The latter uses `trigger_time_min < time < trigger_time_max`; events from that block's pedestal run bypass the trigger cut. |
 | `adc_min`, `adc_max` | Optional bounds on pedestal-subtracted target ADC; other-channel predictors remain uncut. Upper-only means `ADC <= adc_max`; two-sided bounds are open. Omit for no cut. |
 | `validation_split_fraction` | Derivation only; default `0.2` gives an 80%/20% train/validation split, shared across modules. No independent test set. |
@@ -174,6 +175,36 @@ New module IDs can be registered explicitly with
 `python3 -m utils.module_registry --registry data/module_registry.json --add MODULE_NAME`;
 never renumber existing IDs.
 
+Joint DNN training uses `derivation: {datasets: [...]}` instead of a single
+derivation mapping. Each list item contains the same source options above, with
+its own campaign, runs, modules, production, calibration and selections. Across
+campaigns use `methods: [uncorrected, dnn]`; within one campaign both linear
+corrections can also pool the datasets with source-specific calibrations. Use
+`training_grouping: combined` and
+`sample_weighting: none`; keep split/retention settings equal across datasets.
+Application remains one independent block. For example, one dataset can select
+June beam runs with `selection: trigtime`, and another Cassette runs with
+`selection: full`. Every accepted target has equal weight. Early stopping uses
+pooled validation MSE; `history.json` also records each dataset's validation MSE
+and count. The input dimensions and DNN architecture do not change.
+
+Application first selects an exact model implementation match, then a unique
+verified compatible model with the same scientific source recipe. Ambiguous
+matches fail; the newest model is never chosen implicitly. Original model hashes
+and normalization remain unchanged, while predictions record current application
+code separately. Training/resume still require exact implementation provenance.
+Explicit workflow goals `train`, `analytic` or `analytic_allinputs` take precedence
+over historical model reuse: downstream application waits for those producers.
+
+For central versioned calibration files, omit `pedestal_run` and set `conditions`.
+The read-only central Eras helper checks the explicit era/run; optional
+`calibration_file` and `module_map` must match it. Normal run-named pedestal files
+retain their filename/run check. A physically absent eRx (all cell areas zero and
+all calibration entries invalid) supplies missing inputs and no correction targets;
+a physically present eRx without a CM reference remains an error. Inputs sharing
+the filename `NANO.root` in different directories should use separate LS configs.
+For a single era-validated run, `input_pattern` may be the literal Nano path.
+
 The fixed DNN inputs use calibration-subtracted ADC and CM, train-only internal
 z-scores for ADC/CM, and fixed geometry/index/activity features. Targets are
 pedestal-subtracted ADC. Normalization is saved with the model and stays fixed
@@ -197,6 +228,9 @@ during application; no preprocessing options need coordinating between configs.
 | `plots` | Individual-module matrices, spectra, noise and channel/cell-area comparisons. |
 | `multimodule_plot` | Detector-wide summaries; calculate missing covariances/noise fits without needing `plots` first. |
 | `export` | Copy original Nanos and append correction branches; originals remain untouched. |
+
+Empty Nano files are retained with zero events during preparation and export.
+Nonempty files must contain the required measurement branches.
 
 For a first local run with all methods and existing calibrations:
 
@@ -295,6 +329,7 @@ branches can continue.
 | `--json` | Machine-readable plan/status output. |
 | `--submit-directory DIR` | Submit a specific prepared request; omit `--config`. |
 | `--resume DIR` | Resume a stopped frozen workflow; omit `--config`. The original DAG/workers must have exited. |
+| `--clear-locks [--owner-stopped]` | Preview indexed locks; add `--owner-stopped` to remove them after scheduler/PID checks. Works after deleting job workdirs. |
 | `--release DIR --node NAME --owner-stopped` | Release abandoned workflow ownership after verifying its DAG/workers stopped. Does not remove other stage locks. |
 | `-h`, `--help` | Show command-line help. |
 
@@ -303,6 +338,17 @@ another request after a previous submission, run `--prepare` again, then `--subm
 with the same options. Submitted requests keep frozen settings: YAML edits do not
 change active jobs, and source-code changes can invalidate later stages. Keep code
 unchanged until the workflow finishes.
+
+After cancelling all relevant DAGs and workers, preview and clear their stale locks:
+
+```bash
+./workflow.py --clear-locks
+./workflow.py --clear-locks --owner-stopped
+```
+
+The lock index lives in `.workflow_state/lock_catalog/`; output locks remain beside
+shared products. Cleanup removes ownership only, preserving data and caches.
+Use `--config <workflow.yaml>` when that workflow specifies a custom `state_dir`.
 
 Logs are under the printed submission directory: each node has
 `job.<cluster>.<proc>.out/.err`, `pre.log` and `post.log`; the manager log is
@@ -319,6 +365,10 @@ Logs are under the printed submission directory: each node has
 | Individual-module figures | `plots/<application campaign>/Run<run>/<module>/...` |
 | Multimodule figures | `plots/<application campaign>/Run<run>/multimodule/...` |
 | Training curves | `plots/<derivation campaign>/training/...` |
+
+Joint datasets use `<output_dir>/joint/training/`; cross-campaign DNNs default to
+`<output_dir>/models/joint/`. Era-based targets use a `conditions_<era>_Run<run>`
+directory in place of a pedestal-run directory. `--show` reports exact locations.
 
 Figure paths continue with `pedestals_from_Run<run>/<source-model campaign>/`
 `<selection>/variants/rdf2_<ID>/`. Automatic IDs distinguish data/model recipes;
@@ -339,6 +389,7 @@ together under `nano_exports/<method-set>/Run<run>/`.
 | --- | --- |
 | Python/ROOT import errors | Start a fresh shell, source `setup.sh`, and use `python3`. Install the provided requirements in the CMSSW venv. |
 | Missing inputs or ambiguous production | Check run, production, EOS access and proxy; select one production explicitly. |
+| Central DB guest-account warning | Expected for read-only conditions lookup; no private DB credentials are needed. The conditions table reports selected reference runs. |
 | Missing calibration/model/cache | Run the required local steps, or let `workflow.py` include them. Do not run `pedestals` when central constants already exist. |
 | CUDA unavailable or job idle/held | Check GPU allocation, `training_device`/application `device`, resources, proxy, `condor_q` and job logs. |
 | Existing lock/producer | Check the recorded host/PID and scheduler before recovery. Never remove a live owner's lock. |

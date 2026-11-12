@@ -37,8 +37,8 @@ def frozen_settings(config, modules):
     # Freeze resolved public blocks. Production selectors are replaced by exact
     # absolute patterns, so a worker cannot resolve another production or inherit
     # paths from the other campaign.
-    for role in ('derivation','application'):
-        row=settings[role]
+    from .datasets import all_blocks
+    for row in all_blocks(settings):
         for name in ('nano_root','nano_production','pedestal_nano_production'):
             row.pop(name,None)
     for name in ('condor_proxy',):

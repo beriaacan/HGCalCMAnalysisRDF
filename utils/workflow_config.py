@@ -73,9 +73,10 @@ def load(path):
 def freeze(settings):
     """read_settings has already resolved defaults and YAML-relative paths."""
     value = deepcopy(settings)
-    for role in ('derivation', 'application'):
+    from .datasets import all_blocks
+    for row in all_blocks(value):
         for key in ('nano_root', 'nano_production', 'pedestal_nano_production'):
-            value[role].pop(key, None)
+            row.pop(key, None)
     if value.get('condor_proxy') is not None:
         # The caller replaces this with the resolved path before submission.
         value['condor_proxy'] = str(Path(value['condor_proxy']).expanduser())

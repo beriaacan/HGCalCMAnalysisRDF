@@ -1,0 +1,245 @@
+# Existing Cassette Run118787 DNN applied to cosmics Run22000077 LS5; export all saved coverage.
+# Source recipe is unchanged; target uses central P5/v27 conditions and all 106 observed modules.
+# Available steps: pedestals, prepare, training_inputs, analytic, analytic_allinputs,
+#   training_cache, train, submit_train, apply, plots, multimodule_plot, export.
+steps:
+- prepare
+- apply
+- export
+methods:
+- uncorrected
+- dnn
+output_dir: /eos/user/a/areimers/hgcal_rdf
+derivation:
+  campaign: Cassette
+  runs:
+  - 118787
+  modules:
+  - MH_B1W_DNT0177
+  - MH_F1W_CNT0143
+  - MH_F1W_DNT0144
+  - MH_F1W_DNT0145
+  - MH_F1W_DNT0148
+  - MH_F2W_CNT0063
+  - MH_F2W_CNT0064
+  - MH_F2W_CNT0065
+  - MH_F2W_CNT0066
+  - MH_F2W_CNT0067
+  - MH_F2W_CNT0076
+  - MH_L1W_CNT0149
+  - ML_B3W_CNT0187
+  - ML_B3W_CNT0189
+  - ML_F3W_CIH0184
+  - ML_F3W_CIH0201
+  - ML_F3W_CIH0202
+  - ML_F3W_CIH0203
+  - ML_F3W_CIH0204
+  - ML_F3W_CIH0205
+  - ML_F3W_CIH0206
+  - ML_F3W_CIH0207
+  - ML_F3W_CIH0208
+  - ML_F3W_CIH0209
+  - ML_F3W_CIH0210
+  - ML_F3W_CIH0211
+  - ML_F3W_CIH0212
+  - ML_F3W_CIH0213
+  - ML_F3W_CIH0214
+  - ML_F3W_CIH0217
+  - ML_F3W_CIH0218
+  - ML_F3W_CIH0219
+  - ML_F3W_CIH0220
+  - ML_F3W_CIH0221
+  - ML_F3W_CIH0222
+  - ML_F3W_CIH0223
+  - ML_F3W_CIH0225
+  - ML_F3W_CIH0226
+  - ML_F3W_CIH0227
+  - ML_F3W_CIH0228
+  - ML_F3W_CIH0229
+  - ML_F3W_CIH0230
+  - ML_F3W_CIH0254
+  - ML_F3W_CIH0256
+  - ML_F3W_CIH0257
+  - ML_F3W_CIH0258
+  - ML_F3W_CIH0259
+  - ML_F3W_CIH0261
+  - ML_F3W_CIH0271
+  - ML_F3W_CIH0295
+  - ML_F3W_CIH0303
+  - ML_L3W_CNT0181
+  - ML_R3W_CNT0183
+  nano_production: d37dea1a-7fc6-11f1-b653-fa163eaf2bb8
+  pedestal_run: 118787
+  selection: full
+  trigger_time_min: 107
+  trigger_time_max: 113
+  split_seed: 6789
+  validation_split_fraction: 0.2
+  train_event_fraction: 1.0
+  validation_event_fraction: 1.0
+application:
+  campaign: Cassette
+  runs:
+  - 22000077
+  conditions:
+    era: P5/v27
+    run: 22000077
+  input_pattern: /eos/user/g/gboldrin/HGCAL/nano_run22000077_ls5/econ_fed_dump/NANO.root
+  module_map: ../../../Calibrations/P5/maps/modulelocator_P5v27.txt
+  calibration_file: ../../../Calibrations/P5/calib/level0_calib_params_CEE_13_C3_v1.json
+  modules:
+  - MH_B1W_DNT0238
+  - MH_B1W_DNT0239
+  - MH_F1W_DNT0326
+  - MH_F1W_DNT0327
+  - MH_F1W_DNT0328
+  - MH_F1W_DNT0329
+  - MH_F1W_DNT0346
+  - MH_F1W_DNT0347
+  - MH_F1W_DNT0348
+  - MH_F1W_DNT0349
+  - MH_F2W_CNT0131
+  - MH_F2W_DNT0356
+  - MH_F2W_DNT0357
+  - MH_F2W_DNT0358
+  - MH_F2W_DNT0359
+  - MH_F2W_DNT0367
+  - MH_F2W_DNT0374
+  - MH_F2W_DNT0375
+  - MH_F2W_DNT0376
+  - MH_F2W_DNT0378
+  - MH_F2W_DNT0379
+  - MH_F2W_DNT0380
+  - MH_F2W_DNT0443
+  - MH_F2W_DNT0445
+  - MH_L1W_DNT0266
+  - MH_R1W_DNT0174
+  - ML_53W_DNT0874
+  - ML_53W_DNT0875
+  - ML_B3W_DNT0562
+  - ML_B3W_DNT0563
+  - ML_B3W_DNT0569
+  - ML_F2W_DTT0011
+  - ML_F2W_DTT0012
+  - ML_F2W_DTT0013
+  - ML_F2W_DTT0016
+  - ML_F2W_DTT0017
+  - ML_F2W_DTT0018
+  - ML_F2W_DTT0019
+  - ML_F3W_DIH0222
+  - ML_F3W_DIH0224
+  - ML_F3W_DIH0226
+  - ML_F3W_DIH0227
+  - ML_F3W_DIH0235
+  - ML_F3W_DIH0240
+  - ML_F3W_DIH0245
+  - ML_F3W_DIH0248
+  - ML_F3W_DIH0249
+  - ML_F3W_DIH0250
+  - ML_F3W_DIH0263
+  - ML_F3W_DIH0267
+  - ML_F3W_DIH0269
+  - ML_F3W_DIH0271
+  - ML_F3W_DIH0275
+  - ML_F3W_DIH0278
+  - ML_F3W_DIH0279
+  - ML_F3W_DIH0294
+  - ML_F3W_DIH0339
+  - ML_F3W_DIH0340
+  - ML_F3W_DIH0347
+  - ML_F3W_DIH0375
+  - ML_F3W_DIH0378
+  - ML_F3W_DIH0384
+  - ML_F3W_DIH0385
+  - ML_F3W_DIH0387
+  - ML_F3W_DIH0395
+  - ML_F3W_DIH0396
+  - ML_F3W_DIH0399
+  - ML_F3W_DIH0404
+  - ML_F3W_DIH0417
+  - ML_F3W_DIH0421
+  - ML_F3W_DIH0422
+  - ML_F3W_DIH0423
+  - ML_F3W_DIH0426
+  - ML_F3W_DIH0429
+  - ML_F3W_DIH0432
+  - ML_F3W_DIH0433
+  - ML_F3W_DIH0440
+  - ML_F3W_DIH0451
+  - ML_F3W_DIH0453
+  - ML_F3W_DIH0456
+  - ML_F3W_DIH0464
+  - ML_F3W_DIH0465
+  - ML_F3W_DIH0475
+  - ML_F3W_DIH0485
+  - ML_F3W_DIH0490
+  - ML_F3W_DIH0494
+  - ML_F3W_DIH0501
+  - ML_F3W_DIH0507
+  - ML_F3W_DIH0508
+  - ML_F3W_DIH0513
+  - ML_F3W_DIH0522
+  - ML_F3W_DIH0531
+  - ML_F3W_DIH0533
+  - ML_F3W_DIH0542
+  - ML_F3W_DIH0557
+  - ML_F3W_DIH0559
+  - ML_F3W_DIH0567
+  - ML_F3W_DIH0569
+  - ML_F3W_DIH0572
+  - ML_F3W_DIH0573
+  - ML_F3W_DIH0578
+  - ML_F3W_DIH0579
+  - ML_F3W_DIH0588
+  - ML_L3W_DNT0208
+  - ML_R3W_DNT0198
+  - ML_T3W_DNT0816
+  selection: full
+  adc_min: null
+  adc_max: null
+  allow_unknown_modules: true
+  device: auto
+  infer_batch: 8192
+epochs: 200
+batch_events: 1024
+learning_rate: 0.001
+weight_decay: 0.0
+sample_weighting: none
+training_grouping: combined
+training_device: auto
+training_resume: true
+training_input_backend: numeric_cache
+training_events_per_chunk: 50000
+shuffle_buffer_chunks: 10
+training_prefetch_batches: 1
+training_pin_memory: true
+cpus: 4
+events_per_chunk: 5000
+condor_cpus: 4
+condor_gpus: 1
+condor_memory_gb: 16
+condor_job_flavour: tomorrow
+plot_groups:
+- covariance
+- noise_model
+- spectra
+- channel_summaries
+- cell_area
+plot_adc_range:
+- -20
+- 20
+plot_mip_fit: false
+n_coherent_noise_model: 3
+plot_noise_fit_variants:
+- independent
+- fixedD_uncorrected
+plot_noise_maxiter: 2000
+plot_noise_gtol: 1.0e-05
+plot_noise_ftol: 2.220446049250313e-09
+multimodule_plot_groups:
+- performance
+- detector_maps
+- canonical_maps
+multimodule_noise_range:
+- 0
+- 2.5

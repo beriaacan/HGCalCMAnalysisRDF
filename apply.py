@@ -57,13 +57,10 @@ def resolve_application(config: AnalysisConfig) -> dict:
     if config.target.selection not in {'full', 'trigtime'}:
         raise NotImplementedError('Application currently supports full or trigtime; held-out '
                                   'test selectors belong to a later explicit evaluation increment')
-    directory, training = load_inputs(config)
-    expected_model = model_definition(config, directory, training)
-    model_dir = Path(resolve_paths(config)['analytic_predictors']) / 'allinputs'
-    stored = cached_predictors(model_dir, expected_model)
-    if stored is None:
-        raise FileNotFoundError(f'Run --steps analytic_allinputs before application: {model_dir}')
-    spec = training['feature_spec']
+    from utils.model_compatibility import find_linear
+    model_dir,stored=find_linear(config,'analytic_allinputs')
+    expected_model=stored['definition']
+    spec=expected_model['feature_spec']
     modules = {}
     for job in plan(config):
         if 'apply' not in job.roles:
@@ -113,7 +110,7 @@ def resolve_application(config: AnalysisConfig) -> dict:
     definition = {'schema': SCHEMA, 'method': 'analytic_allinputs',
                   'target': {'campaign': recipe.campaign,
                              'runs': [source.run for source in recipe.dataset.sources],
-                             'pedestal_run': recipe.pedestal.run, 'selection': recipe.selection,
+                             'pedestal_run': recipe.pedestal.run, 'conditions':recipe.conditions,'selection': recipe.selection,
                              'trigger_time_window': recipe.trigger_time_window,
                              'adc_min': recipe.dataset.adcmin, 'adc_max': recipe.dataset.adcmax},
                   'model_definition_signature': signature(expected_model),

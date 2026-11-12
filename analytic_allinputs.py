@@ -31,7 +31,9 @@ def describe(config: AnalysisConfig) -> dict:
 def _definition(config, directory, manifest):
     from utils.analytic import SCHEMA
     calculation = (ROOT_DIR / 'utils/analytic.py').read_text().split('def load_module(', 1)[0]
+    from utils.model_compatibility import population_request
     return {'schema': SCHEMA, 'training_inputs': str(directory),
+            'application_population_request': population_request(config),
             'training_signature': manifest['signature'],
             'training_manifest_sha256': sha(directory / 'manifest.json'),
             'preprocessing_sha256': manifest['preprocessing_sha256'],

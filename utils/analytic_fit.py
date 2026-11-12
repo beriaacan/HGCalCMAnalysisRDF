@@ -17,7 +17,8 @@ def _sources(manifest, module):
             item = next(row for row in prepared['outputs'] if row['module'] == module
                         and row['source_file_index'] == source['index'])
             yield (Path(prepared['directory']) / item['file'],
-                   dict(source, run=prepared['run']))
+                   dict(source, run=prepared['run'],**{k:prepared[k] for k in
+                        ('dataset_index','stream_id','campaign') if k in prepared}))
 
 
 def _expected_counts(manifest, module, partition):
@@ -27,6 +28,8 @@ def _expected_counts(manifest, module, partition):
 
 
 def _view(ROOT, path, source, config, spec, module, partition):
+    from .datasets import source_config
+    config=source_config(config,source)
     rdf = ROOT.RDataFrame('Events', root_path(str(path)))
     return training_view(rdf, config, spec, module, source).Filter(
         f'training_retained && training_split=={partition}', 'retained regression partition')

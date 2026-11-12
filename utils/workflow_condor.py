@@ -125,7 +125,8 @@ def scheduler_environment(plan):
 
 def inventories(config, *, pedestal=False):
     rows = {}
-    for recipe in (config.correction, config.target):
+    from .datasets import recipes
+    for recipe in (*recipes(config), config.target):
         sources = recipe.pedestal.sources if pedestal else recipe.dataset.sources
         for source in sources:
             files = sorted(str(Path(p).resolve()) for p in glob.glob(source.input_pattern) if Path(p).is_file())
@@ -142,7 +143,9 @@ def fixed_files(config):
     files = {ROOT_DIR/name for name in WORKER_CODE}
     files.update((config.dnn['cell_area_file'], config.correction.module_map, config.target.module_map,
                   config.training['condor_setup_file']))
-    for row in (config.correction, config.target):
+    from .datasets import recipes
+    for row in (*recipes(config), config.target):
+        files.add(row.module_map)
         if row.calibration_file.is_file():
             files.add(row.calibration_file)
     central = ROOT_DIR.parents[1]
@@ -210,11 +213,13 @@ def prepare(plan):
         if plan['refresh_plots'] and node['stage'] in {'plots', 'multimodule_plot'}:
             request = digest({'request': request, 'refresh': workflow_id})
         record = {'schema': plan['schema'], 'node': node['name'], 'stage': node['stage'],
+                  'source_model_check':node.get('source_model_check'),
+                  'source_model_method':node.get('source_model_method'),
                   'request': request, 'work': str(work), 'workflow_id': workflow_id,
                   'token': workflow_id+'/'+node['name'], 'config': str(path),
                   'state_file': str(work/node['name']/'state.json'),
                   'receipt': str(Path(workflow['state_dir'])/'products'/f'{request}.json'),
-                  'locks': node['locks'], 'runtime': runtime, 'resources': node['resources'],
+                  'locks': node['locks'], 'scheduler': selected_scheduler, 'runtime': runtime, 'resources': node['resources'],
                   'registry_locks': [str(Path(workflow['state_dir'])/'claims'/digest(lock)) for lock in node['locks']],
                   'frozen_files': evidence([*fixed_files(config), path]),
                   'inventories': ([] if node['stage'] == 'pedestals' and node['complete'] else

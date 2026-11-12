@@ -46,6 +46,7 @@ class DatasetConfig:
     module_map: Path
     calibration_file: Path
     trigger_time_window: tuple[float, float]
+    conditions: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ class AnalysisConfig:
     training: dict[str, Any]
     application: dict[str, Any]
     multimodule: dict[str, Any]
+    derivations: tuple[DatasetConfig, ...] = ()
 
 
 def local_path(value: Any, base: Path, label: str) -> Path:
@@ -105,7 +107,7 @@ def module_values(value: Any, name: str) -> str | tuple[str, ...]:
     return tuple(value)
 
 
-def dataset_value(runs: Any, pattern: Any, lower: Any, upper: Any, base: Path) -> Dataset:
+def dataset_value(runs: Any, pattern: Any, lower: Any, upper: Any, base: Path, *, literal=False) -> Dataset:
     if type(runs) is int:
         runs = [runs]
     if not isinstance(runs, list) or not runs:
@@ -114,7 +116,7 @@ def dataset_value(runs: Any, pattern: Any, lower: Any, upper: Any, base: Path) -
         positive_int(run, "run")
     if len(runs) != len(set(runs)):
         raise ValueError("Run lists must not contain duplicates")
-    if not isinstance(pattern, str) or "{run}" not in pattern:
+    if not isinstance(pattern, str) or ("{run}" not in pattern and not (literal and len(runs)==1)):
         raise ValueError("input_pattern must contain {run}, including for pedestal discovery")
     sources = []
     for run in runs:
@@ -179,7 +181,13 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
     _, settings = read_settings(path)
     # Keep the established numerical validators/resources behind the public blocks.
     effective=settings
-    source,application=settings['derivation'],settings['application']
+    from .datasets import blocks
+    source_rows=blocks(settings)
+    source,application=source_rows[0],settings['application']
+    for row in source_rows[1:]:
+        for key in ('split_seed','validation_split_fraction','train_event_fraction','validation_event_fraction'):
+            if row[key]!=source[key]:
+                raise ValueError(f'Joint datasets must share {key}; selections and conditions may differ')
     settings=dict(settings)
     settings.update({key:source[key] for key in ('split_seed','validation_split_fraction',
                                                 'train_event_fraction','validation_event_fraction')})
@@ -193,12 +201,14 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
     configured_steps=validate_steps(settings['steps'])
     selected_steps=configured_steps if steps is None else validate_steps(steps)
 
-    def recipe(role):
-        row=effective[role]
+    def recipe(role,row=None):
+        row=effective[role] if row is None else row
         campaign=row['campaign']
-        dataset=dataset_value(row['runs'],row['input_pattern'],row['adc_min'],row['adc_max'],path.parent)
-        pedestal_run=positive_int(row['pedestal_run'],f'{role}.pedestal_run')
-        pedestal=dataset_value(pedestal_run,row['pedestal_input_pattern'],None,None,path.parent)
+        dataset=dataset_value(row['runs'],row['input_pattern'],row['adc_min'],row['adc_max'],path.parent,
+                              literal=row['conditions'] is not None)
+        pedestal_run=(positive_int(row['pedestal_run'],f'{role}.pedestal_run') if row['conditions'] is None else None)
+        pedestal=(dataset_value(pedestal_run,row['pedestal_input_pattern'],None,None,path.parent)
+                  if pedestal_run is not None else Dataset(None,(),None,None))
         selection=row['selection']
         if selection not in {'full','trigtime','test','test_trigtime'}:
             raise ValueError(f'{role}.selection must be full or trigtime; held-out selectors are not implemented')
@@ -209,15 +219,26 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
         module_map=local_path(row['module_map'],path.parent,f'{role}.module_map')
         calibration_file=local_path(row['calibration_file'],path.parent,f'{role}.calibration_file')
         try:
-            validate_calibration_run(calibration_file,pedestal_run)
+            if row['conditions'] is None:
+                validate_calibration_run(calibration_file,pedestal_run)
+            else:
+                from .conditions import validate
+                validate(row['conditions'],calibration_file,module_map)
         except ValueError as exc:
             raise ValueError(f'{role}: {exc}') from None
         window=tuple(number(row[name],f'{role}.{name}') for name in ('trigger_time_min','trigger_time_max'))
         if window[0]>=window[1]:
             raise ValueError(f'{role}: trigger_time_min must be smaller than trigger_time_max')
-        return DatasetConfig(campaign,dataset,pedestal,selection,modules,module_map,calibration_file,window)
+        return DatasetConfig(campaign,dataset,pedestal,selection,modules,module_map,calibration_file,window,row['conditions'])
 
-    correction=recipe('derivation')
+    source_recipes=tuple(recipe('derivation',row) for row in source_rows)
+    if len({row.campaign for row in source_recipes})>1 and set(selected_steps)&{'analytic','analytic_allinputs'}:
+        raise ValueError('Cross-campaign derivation supports DNN training; linear pooling requires one campaign')
+    correction=source_recipes[0]
+    if len(source_rows)>1 and application['modules']=='all':
+        if any(isinstance(row.modules,str) for row in source_recipes):
+            raise ValueError('For joint derivation with module selectors, specify application.modules explicitly')
+        application['modules']=list(dict.fromkeys(name for row in source_recipes for name in row.modules))
     target=recipe('application')
     output = local_path(settings["output_dir"], path.parent, "output_dir")
     models = local_path(settings["model_dir"], path.parent, "model_dir")
@@ -311,4 +332,5 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
                           {"optimize_binning": optimize_binning},
                           {"activity_thresholds": tuple(thresholds)}, parse_plots(settings),
                           parse_training(settings,path.parent,local_path), parse_application(settings,path.parent,local_path),
-                          parse_multimodule(settings,path.parent,local_path))
+                          parse_multimodule(settings,path.parent,local_path),
+                          source_recipes if 'datasets' in effective['derivation'] else ())

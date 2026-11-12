@@ -8,11 +8,11 @@ analyses:
 
 # Defaults are installation-relative, not YAML-relative. Omit to use them.
 work_dir: ../workdir_condor/workflows  # Frozen submissions/logs; use shared AFS.
-state_dir: ../.workflow_state        # Shared completion receipts; use shared AFS.
-max_jobs: 8                          # Maximum queued/running jobs in this DAG.
-max_io_jobs: 2                       # CPU-stage job limit in this DAG.
-max_gpu_jobs: 1                      # GPU-stage job limit in this DAG.
-retries: 0                          # Additional node attempts; default is explicit resume.
+state_dir: ../.workflow_state          # Shared completion receipts; use shared AFS.
+max_jobs: 50                           # Maximum queued/running jobs in this DAG.
+max_io_jobs: 2                         # CPU-stage job limit in this DAG.
+max_gpu_jobs: 2                        # GPU-stage job limit in this DAG.
+retries: 0                             # Additional node attempts; default is explicit resume.
 
 # Default resource values come from each analysis config's condor_* settings.
 # GPUs default to condor_gpus for train and DNN apply (unless device: cpu),

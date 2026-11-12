@@ -27,7 +27,8 @@ SCHEMA = 'hgcal_cm_event_arrays_v2'
 ROOT_DIR = Path(__file__).resolve().parents[1]
 CODE = ('utils/training_cache.py', 'utils/dnn_batches.py',
         'utils/training.py', 'utils/training_helpers.hxx', 'utils/prepare_rdf.py',
-        'utils/prepare_helpers.hxx', 'utils/preprocessing.py', 'utils/module_registry.py')
+        'utils/prepare_helpers.hxx', 'utils/preprocessing.py', 'utils/module_registry.py',
+        'utils/datasets.py','utils/conditions.py')
 LABELS = ('train', 'validation')
 
 
@@ -53,7 +54,9 @@ def unit_path(module, source):
     # Module names come from the validated feature specification, not YAML paths.
     if not module or Path(module).name != module or module in {'.', '..'}:
         raise ValueError(f'Invalid cache module name: {module}')
-    return Path(f'Run{int(source["run"])}')/module/f'file{int(source["index"])}'
+    prefix=(Path(f'dataset{source["dataset_index"]}_{source["campaign"]}')
+            if 'dataset_index' in source else Path())
+    return prefix/Path(f'Run{int(source["run"])}')/module/f'file{int(source["index"])}'
 
 
 def unit_definition(parent_signature, module, path, source):
@@ -140,7 +143,8 @@ class EventCache:
                         or targets.shape != (chunk['events'], nch)
                         or int(np.isfinite(targets).sum()) != chunk['targets']):
                     raise ValueError(f'Invalid event-array chunk: {key}/{prefix}')
-                yield module, source['run'], features, targets
+                from .datasets import stream_id
+                yield module, stream_id(source), features, targets
 
 
 def write_array(archive, name, value):
@@ -213,7 +217,8 @@ def build(config, input_dir, manifest):
         from .dnn_training import training_lock_message
         raise ValueError(training_lock_message(lock, purpose='cache')) from None
     try:
-        (lock/'owner.json').write_text(json.dumps({'host': socket.gethostname(), 'pid': os.getpid()}))
+        from utils.workflow_registry import record_lock_owner
+        record_lock_owner(lock, {'host': socket.gethostname(), 'pid': os.getpid()})
         existing = folder/'manifest.json'
         if existing.exists():
             old = json.loads(existing.read_text())
@@ -239,7 +244,8 @@ def build(config, input_dir, manifest):
                       produce_unit(config, manifest, module, path, source, unit_expected, target))
             stored_bytes += sum(row['size'] for row in record['outputs'])
             for partition, part in enumerate(record['partitions']):
-                count_key = (module, str(source['run']), partition)
+                from .datasets import stream_id
+                count_key = (module, str(stream_id(source)), partition)
                 total_counts[count_key] = total_counts.get(count_key, np.zeros(len(part['channel_counts']), dtype=np.int64)) + part['channel_counts']
             records[key] = {'manifest_sha256': sha(target/'manifest.json')}
             _write_manifest(folder, overview)

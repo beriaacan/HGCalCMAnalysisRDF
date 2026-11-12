@@ -17,6 +17,19 @@ class Planner:
         from .training_batch import WORKER_CODE
         from .workflow_registry import digest, evidence
         self.code_key = digest(evidence([ROOT/name for name in WORKER_CODE]))
+        # Explicit producers take precedence over compatible historical bundles.
+        # Collect all requests first, including sharing across analysis configs.
+        self.current_models=set()
+        for entry in workflow['analyses']:
+            config=from_settings(entry['settings'])
+            for step in set(entry['steps'])&{'train','analytic','analytic_allinputs'}:
+                method='dnn' if step=='train' else step
+                self.current_models.add(self.model_key(config,method))
+
+    @staticmethod
+    def model_key(config,method):
+        from .identity import model_id,linear_id
+        return (str(config.model_dir),model_id(config) if method=='dnn' else linear_id(config),method)
 
     def build(self):
         for entry in self.workflow['analyses']:
@@ -64,10 +77,17 @@ class Planner:
         settings['steps'] = [stage]
         if stage in {'training_inputs', 'analytic', 'analytic_allinputs', 'training_cache', 'train'}:
             from .config_defaults import DATA_DEFAULTS, DATA_REQUIRED
-            row = settings['derivation']
+            from .datasets import blocks
+            row = blocks(settings)[0]
             settings['application'].update({key: deepcopy(row[key]) for key in
                 DATA_REQUIRED | DATA_DEFAULTS.keys() if key in row})
         config = from_settings(settings)
+        if stage in {'apply','plots','multimodule_plot','export'}:
+            from dataclasses import replace
+            current=tuple(m for m in config.methods if m!='uncorrected'
+                          and self.model_key(config,m) in self.current_models)
+            if current:
+                config=replace(config,training=dict(config.training,_workflow_current_models=current))
         key = request_key(config, stage)
         name = stage+'_'+key[:16]
         if name in self.nodes:
@@ -128,7 +148,9 @@ class Planner:
             parents += self.preparations(settings, source, role='apply')
             for method in config.methods:
                 if method != 'uncorrected':
-                    parents += self.ensure(settings, 'train' if method == 'dnn' else method, source)
+                    checked=([] if method in config.training.get('_workflow_current_models',())
+                             else self.saved_models(settings,source,method))
+                    parents += checked or self.ensure(settings, 'train' if method == 'dnn' else method, source)
         elif stage in {'plots', 'multimodule_plot', 'export'}:
             parents += self.ensure(settings, 'apply', source)
         else:
@@ -137,6 +159,17 @@ class Planner:
         return [name]
 
     def preparations(self, settings, source, role=None):
+        from .datasets import blocks,source_settings
+        if 'datasets' in settings['derivation']:
+            result=[]
+            config=from_settings(settings)
+            for index,_row in enumerate(blocks(settings)):
+                value=source_settings(settings,index)
+                if settings['application']['modules']=='all':
+                    from .prepared import derivation_modules
+                    value['application']['modules']=list(derivation_modules(config))
+                result+=self.preparations(value,source,role)
+            return list(dict.fromkeys(result))
         from dataclasses import replace
         from .prepared import plan, cache_directory, derivation_modules
         from .paths import discover_files
@@ -186,16 +219,55 @@ class Planner:
     def calibrations(self, settings, source):
         """Always retain one check/production prerequisite per configured file."""
         result = []
+        from .datasets import blocks,source_settings
+        if 'datasets' in settings['derivation']:
+            return list(dict.fromkeys(name for index,_ in enumerate(blocks(settings))
+                         for name in self.calibrations(source_settings(settings,index),source)))
         for role in ('derivation', 'application'):
             row = settings[role]
             selection = row['modules']
             if role == 'application' and selection == 'all':
                 selection = settings['derivation']['modules']
-            value = self.preparation_settings(settings, role, row['pedestal_run'], selection)
+            run=row['pedestal_run'] if row.get('conditions') is None else (row['runs'][0] if isinstance(row['runs'],list) else row['runs'])
+            value = self.preparation_settings(settings, role, run, selection)
             for block in ('derivation', 'application'):
                 value[block]['input_pattern'] = row['pedestal_input_pattern']
             result += self.ensure(value, 'pedestals', source, calibration=True)
         return list(dict.fromkeys(result))
+
+    def saved_models(self,settings,source,method='dnn'):
+        """Read-only prerequisites for verified historical DNNs, never resume them."""
+        from .model_compatibility import find,find_linear
+        from .model_selection import read_model
+        from .prepared import derivation_modules
+        from .workflow_registry import digest
+        from .workflow_products import artifact_files
+        config=from_settings(settings)
+        groups=['combined'] if config.training['training_grouping']=='combined' else derivation_modules(config)
+        linear=find_linear(config,method,required=False) if method!='dnn' else None
+        models=([linear[0]] if linear else []) if method!='dnn' else [find(config,g,required=False) for g in groups]
+        if not models:
+            return []
+        if any(p is None for p in models):
+            return []
+        signatures={str(p):(linear[1]['signature'] if linear else read_model(p)['record']['signature']) for p in models}
+        key=digest({'method':method,'saved_models':signatures})
+        stage='train' if method=='dnn' else method
+        name=stage+'_saved_'+key[:16]
+        if name not in self.nodes:
+            request_resources=resources(self.workflow,stage,config)
+            request_resources['gpus']=0
+            files=artifact_files(models)
+            if linear:
+                files.add(Path(linear[1]['definition']['training_inputs'])/'manifest.json')
+            self.nodes[name]={'name':name,'stage':stage,'request':key,'settings':deepcopy(settings),
+                'sources':[source],'complete':True,'files':[str(p) for p in sorted(files)],
+                'parents':[],'resources':request_resources,'locks':[],
+                'outputs':list(map(str,models)),'source_model_check':list(map(str,models)),
+                'source_model_method':method}
+        elif source not in self.nodes[name]['sources']:
+            self.nodes[name]['sources'].append(source)
+        return [name]
 
     @staticmethod
     def modules(job):

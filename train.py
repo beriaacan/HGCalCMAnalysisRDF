@@ -8,6 +8,7 @@ from utils.paths import resolve_paths
 
 
 def describe(config):
+    from utils.prepared import derivation_modules
     from utils.preprocessing import dnn_definition
     from utils.training_cache import destination as cache_destination
     from utils.training_metadata import destination
@@ -16,7 +17,8 @@ def describe(config):
             'input_backend':config.training['training_input_backend'],
             'numeric_cache':str(cache_destination(config,resolve_paths(config)['dnn_training_inputs'])),
             'models': str(destination(config, group)), 'automatic_recipe': destination(config, group).parent.name,
-            'grouping':config.training['training_grouping'],'modules':config.correction.modules,
+            'grouping':config.training['training_grouping'],
+            'modules':derivation_modules(config) if config.derivations else config.correction.modules,
             'device':config.training['training_device'],'environment':str(config.training['training_environment']),
             'batch_events':config.dnn['batch_events'],
             'training_events_per_chunk':config.training['training_events_per_chunk'],

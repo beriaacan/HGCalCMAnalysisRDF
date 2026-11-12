@@ -1,0 +1,10 @@
+# Joint training; apply to June Run118179 using the analysis config's fixed cuts.
+analyses:
+  # Available goals: pedestals, prepare, training_inputs, analytic,
+  #   analytic_allinputs, training_cache, train, apply, plots, multimodule_plot, export.
+  - config: ../configs/jun2026_cassette_joint.yaml
+    steps: [plots, multimodule_plot]
+
+max_jobs: 4
+max_io_jobs: 2
+max_gpu_jobs: 2

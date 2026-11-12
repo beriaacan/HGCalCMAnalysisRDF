@@ -46,20 +46,28 @@ def validate_calibration_run(path: Path, pedestal_run: int) -> None:
 def validate_calibrations(config: AnalysisConfig, *, require_files: bool, roles=('derive', 'apply')) -> dict:
     """Report missing files for inspection; require them before consuming steps."""
     results = {}
-    for role, recipe in (("derive", config.correction), ("apply", config.target)):
+    from .datasets import recipes
+    for role, recipe in [*(("derive",r) for r in recipes(config)), ("apply", config.target)]:
         if role not in roles:
             continue
         path = recipe.calibration_file
-        validate_calibration_run(path, recipe.pedestal.run)
+        if recipe.conditions:
+            from .conditions import validate
+            validate(recipe.conditions,path,recipe.module_map)
+        else:
+            validate_calibration_run(path, recipe.pedestal.run)
         if path.exists() and not path.is_file():
             raise ValueError(f"{role} calibration_file is not a regular file: {path}")
         available = path.is_file()
         if require_files and not available:
             raise FileNotFoundError(f"Missing {role} calibration file: {path}")
-        results[role] = {
+        label=role if role not in results else f'{role}_{len(results)}'
+        results[label] = {
             "file": str(path),
             "pedestal_run": recipe.pedestal.run,
-            "filename_run_matches": True,
+            "filename_run_matches": None if recipe.conditions else True,
+            "era_run_validated": bool(recipe.conditions),
             "status": "available" if available else "missing",
+            "conditions": recipe.conditions,
         }
     return results

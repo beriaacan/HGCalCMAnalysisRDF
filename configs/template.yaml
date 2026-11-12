@@ -10,14 +10,32 @@ steps: [prepare]
 output_dir: ${HOME}/hgcal_rdf
 
 derivation:
+  # Alternative to this single dataset: datasets: [<complete source mapping>, ...].
+  # Every dataset uses the same keys below, including its own conditions/selections.
+  # Joint training requires training_grouping: combined and sample_weighting: none;
+  # Cross-campaign: methods: [uncorrected, dnn]. Within one campaign, both linear
+  # corrections can also pool the datasets, using each source's own calibration.
+  # Split/retention settings must agree across blocks.
+  # Equal weight per accepted target, pooled validation for early stopping, and
+  # separate validation MSE/counts per dataset. No default dataset reweighting.
   # Required: Jun2026TB or Cassette. Nano root, central map and calibration defaults follow THIS block.
   campaign: Jun2026TB
 
   # Required: run number or nonempty list; Nano files are resolved in this order.
   runs: [118151, 118153]
 
-  # Required: source run in level0_calib_<run>.json; filename/run mismatch is an error.
+  # Required unless conditions is set: source run in level0_calib_<run>.json.
   pedestal_run: 118151
+
+  # Default: null. Alternative to pedestal_run for central era/run-valid files.
+  # To use: omit pedestal_run and set conditions: {era: P5/v27, run: 22000077}.
+  # runs must contain exactly that run. The central Eras helper selects validity;
+  # calibration_file/module_map, if supplied, must match the returned payload/maps.
+  # Otherwise locate one equivalent central file/map or fail on missing/ambiguity.
+  # Resolved conditions are automatically frozen for batch; do not write resolved
+  # metadata by hand. No central files are copied into local calibrations/.
+  # With one era-validated run, input_pattern may be a literal file path without {run}.
+  conditions: null
 
   # all/ld/hd or an ordered list. In application, all means exactly the derivation module set. Default: all.
   modules: all
@@ -78,8 +96,11 @@ application:
   # Required: run number or nonempty list; Nano files are resolved in this order.
   runs: [118179]
 
-  # Required: source run in level0_calib_<run>.json; filename/run mismatch is an error.
+  # Required unless conditions is set: source run in level0_calib_<run>.json.
   pedestal_run: 118151
+
+  # Same alternative central era/run selection as derivation. Default: null.
+  conditions: null
 
   # all/ld/hd or an ordered list. In application, all means exactly the derivation module set. Default: all.
   modules: all
