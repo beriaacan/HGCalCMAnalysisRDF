@@ -1,0 +1,426 @@
+# Complete configuration reference: every supported top-level and block option.
+# Copy and edit before processing. Paths are YAML-relative; null resource paths
+# resolve inside this installation. Derivation alone identifies the trained DNN;
+# application settings cannot choose another source model. No model-name/reference option.
+# Replace REPLACE_PRODUCTION with your explicit production directory.
+
+# Available steps: pedestals, prepare, training_inputs, analytic, analytic_allinputs,
+#   training_cache, train, submit_train, apply, plots, multimodule_plot, export.
+steps: [prepare]
+output_dir: ${HOME}/hgcal_rdf
+
+derivation:
+  # Required: Jun2026TB or Cassette. Nano root, central map and calibration defaults follow THIS block.
+  campaign: Jun2026TB
+
+  # Required: run number or nonempty list; Nano files are resolved in this order.
+  runs: [118151, 118153]
+
+  # Required: source run in level0_calib_<run>.json; filename/run mismatch is an error.
+  pedestal_run: 118151
+
+  # all/ld/hd or an ordered list. In application, all means exactly the derivation module set. Default: all.
+  modules: all
+
+  # null uses this campaign default EOS root. Override only together with nano_production. Default: null.
+  nano_root: null
+
+  # Required unless input_pattern is supplied: pinned production directory or explicit glob. Multiple matching production directories are refused; no newest selection. Default: null.
+  nano_production: REPLACE_PRODUCTION
+
+  # Alternative to nano_root/nano_production: YAML-relative or absolute glob containing {run}. Default: null.
+  input_pattern: null
+
+  # null uses this block campaign central module locator; an explicit path is YAML-relative. Default: null.
+  module_map: null
+
+  # Optional separate pedestal production, using this block Nano root. Default: null (use main input pattern).
+  pedestal_nano_production: null
+
+  # Alternative explicit pedestal glob containing {run}. Default: null (use main input pattern).
+  pedestal_input_pattern: null
+
+  # Optional override; null finds one matching central file, else calibrations/<campaign>/level0_calib_<pedestal_run>.json in this framework. Ambiguity is an error. Default: null.
+  calibration_file: null
+
+  # full or trigtime; pedestal-source events bypass the trigger cut. Default: full.
+  selection: full
+
+  # Exclusive lower trigger bound, ignored with full. Default: -2.
+  trigger_time_min: -2
+
+  # Exclusive upper trigger bound, ignored with full. Default: 5.
+  trigger_time_max: 5
+
+  # Pedestal-subtracted ADC lower bound per target; other predictors are uncut. Default: null (no bound).
+  adc_min: null
+
+  # Pedestal-subtracted ADC upper bound per target; upper-only accepts <= maximum. Default: null (no bound).
+  adc_max: null
+
+  # Unsigned 64-bit seed for module-shared split/retention from exact Nano event and source UUID. Default: 6789.
+  split_seed: 6789
+
+  # Validation proportion before retention; no independent test set. Default: 0.2.
+  validation_split_fraction: 0.2
+
+  # Fraction retained within the training partition: 0.5 gives about 40% of all events for an 80/20 split. Default: 1.0.
+  train_event_fraction: 1.0
+
+  # Fraction retained within the validation partition; does not change the split threshold. Default: 1.0.
+  validation_event_fraction: 1.0
+
+
+application:
+  # Required: Jun2026TB or Cassette. Nano root, central map and calibration defaults follow THIS block.
+  campaign: Jun2026TB
+
+  # Required: run number or nonempty list; Nano files are resolved in this order.
+  runs: [118179]
+
+  # Required: source run in level0_calib_<run>.json; filename/run mismatch is an error.
+  pedestal_run: 118151
+
+  # all/ld/hd or an ordered list. In application, all means exactly the derivation module set. Default: all.
+  modules: all
+
+  # null uses this campaign default EOS root. Override only together with nano_production. Default: null.
+  nano_root: null
+
+  # Required unless input_pattern is supplied: pinned production directory or explicit glob. Multiple matching production directories are refused; no newest selection. Default: null.
+  nano_production: REPLACE_PRODUCTION
+
+  # Alternative to nano_root/nano_production: YAML-relative or absolute glob containing {run}. Default: null.
+  input_pattern: null
+
+  # null uses this block campaign central module locator; an explicit path is YAML-relative. Default: null.
+  module_map: null
+
+  # Optional separate pedestal production, using this block Nano root. Default: null (use main input pattern).
+  pedestal_nano_production: null
+
+  # Alternative explicit pedestal glob containing {run}. Default: null (use main input pattern).
+  pedestal_input_pattern: null
+
+  # Optional override; null finds one matching central file, else calibrations/<campaign>/level0_calib_<pedestal_run>.json in this framework. Resolved independently of derivation. Default: null.
+  calibration_file: null
+
+  # full or trigtime; pedestal-source events bypass the trigger cut. Default: full.
+  selection: full
+
+  # Exclusive lower trigger bound, ignored with full. Default: -2.
+  trigger_time_min: -2
+
+  # Exclusive upper trigger bound, ignored with full. Default: 5.
+  trigger_time_max: 5
+
+  # Pedestal-subtracted ADC lower bound per target; other predictors are uncut. Default: null (no bound).
+  adc_min: null
+
+  # Pedestal-subtracted ADC upper bound per target; upper-only accepts <= maximum. Default: null (no bound).
+  adc_max: null
+
+  # Permission to apply the derived DNN to modules outside its training set; geometry/calibration/ID checks remain. Default: false.
+  allow_unknown_modules: false
+
+  # auto selects CUDA when available; cpu or cuda can be requested explicitly. Default: auto.
+  device: auto
+
+  # Application module-events per input-expansion batch. Default: 1024.
+  batch_events: 1024
+
+  # Application ROOT read chunk size. Default: 50000.
+  events_per_chunk: 50000
+
+  # Bounded application prefetch queue. Default: 1.
+  prefetch_batches: 1
+
+  # Pin application CPU tensors for CUDA transfer. Default: true.
+  pin_memory: true
+
+  # Maximum channel-target rows per DNN forward call. Default: 8192.
+  infer_batch: 8192
+
+
+# Pedestal-subtracted ADC thresholds saved by prepare and used for activity fractions; changing invalidates prepared caches. Default: [10, 50, 200, 500].
+activity_thresholds: [10, 50, 200, 500]
+
+# Relative eigenvalue cutoff for the target-conditional correlation-matrix pseudoinverse. Default: 1.0e-10.
+analytic_rcond: 1.0e-10
+
+# Whole accepted module-event rows per optimizer step, before expanding their finite channel targets. Default: 1024.
+batch_events: 1024
+
+# Central LocalCalibration/data/cellareas.json; defaults relative to the installed package, not this YAML. Omit to resolve as described.
+cell_area_file: null
+
+# Requested CPUs and worker processing thread limit. Default: 4.
+condor_cpus: 4
+
+# 0 or 1; must agree with training_device (auto resolves to the allocation). Default: 1.
+condor_gpus: 1
+
+# CERN runtime class, e.g. tomorrow; this is a batch resource choice. Default: tomorrow.
+condor_job_flavour: tomorrow
+
+# Requested worker memory in GiB. Default: 16.
+condor_memory_gb: 16
+
+# Minimum driver-supported CUDA runtime for GPU matching; quoted major.minor. Default: '12.6'.
+condor_minimum_cuda_runtime: '12.6'
+
+# null uses X509_USER_PROXY or /tmp/x509up_u<uid>; contents are never recorded in configs. Default: null.
+condor_proxy: null
+
+# Optional site Bash setup sourced after the recorded CMSSW bootstrap; default <framework>/setup.sh (no extra hook). Omit to resolve as described.
+condor_setup_file: null
+
+# false writes reviewable job files only; true submits when submit_train is explicitly invoked. Default: true.
+condor_submit: true
+
+# Validate/stage a proxy for batch data access; false only when no proxy is needed. Default: true.
+condor_use_x509_proxy: true
+
+# Shared AFS batch area; default <framework>/workdir_condor. Credential staging protects its private subdirectory. Omit to resolve as described.
+condor_work_dir: null
+
+# ROOT/BLAS/PyTorch thread limit for local processing; Condor replaces it with condor_cpus. Default: 4.
+cpus: 4
+
+# Explicit deterministic cuBLAS workspace SIZE_KiB:COUNT pairs, set before CUDA initialization. Default: :4096:8.
+cublas_workspace_config: :4096:8
+
+# cuBLASLt workspace cap in KiB; must fit inside the cuBLAS allocation. Default: 1024.
+cublaslt_workspace_size_kib: 1024
+
+# Hidden-layer dropout probability; disabled during application and validation. Default: 0.0.
+dropout: 0.0
+
+# Absolute validation-loss decrease required to reset early-stopping patience. Default: 0.0.
+early_stopping_min_delta: 0.0
+
+# Epochs without improvement by early_stopping_min_delta before stopping. Default: 15.
+early_stopping_patience: 15
+
+# Maximum epoch count; early stopping may finish earlier. Changing this setting selects a new automatic model variant. Default: 200.
+epochs: 200
+
+# Prepared-tree autoflush and covariance/regression buffer size; separate from DNN read chunks. Default: 5000.
+events_per_chunk: 5000
+
+# Ordered feature groups; per-channel groups last. ADC/CM are internally z-scored; other features pass through. Include module_fraction; keep common LD/HD layout. Default: [cm_erx, activity_fractions, module_id, module_fraction, adc_allchannels, channel_in_erx, erx_index, cell_area_fraction].
+input_features: [cm_erx, activity_fractions, module_id, module_fraction, adc_allchannels, channel_in_erx, erx_index,
+  cell_area_fraction]
+
+# Initial AdamW learning rate; scheduler may reduce it. Default: 0.001.
+learning_rate: 0.001
+
+# Only mse is supported. Censored loss models are not implemented. Default: mse.
+loss: mse
+
+# Multiply learning rate by this factor on a validation plateau. Default: 0.5.
+lr_scheduler_factor: 0.5
+
+# Learning-rate floor. Default: 1.0e-06.
+lr_scheduler_min_lr: 1.0e-06
+
+# Plateau epochs before learning-rate reduction. Default: 5.
+lr_scheduler_patience: 5
+
+# Relative validation improvement threshold for ReduceLROnPlateau. Default: 0.0001.
+lr_scheduler_threshold: 0.0001
+
+# Common LD/HD channel width; must be 444. Default: 444.
+max_channels: 444
+
+# Application/comparison methods: uncorrected, analytic (CM-only), analytic_allinputs, dnn. Default: [uncorrected, analytic, analytic_allinputs, dnn].
+methods: [uncorrected, analytic, analytic_allinputs, dnn]
+
+# Fill nonfinite/padded measurements and the target own-ADC input before any normalization. Default: 0.0.
+missing_input_value: 0.0
+
+# null resolves to output_dir/models/<derivation.campaign>; only a storage override, never a model selection. Default: null.
+model_dir: null
+
+# Framework-owned append-only stable IDs. Default <framework>/data/module_registry.json. Omit to resolve as described.
+module_registry_file: null
+
+# Measured RMS/fitted RMS minus one; must straddle zero. Default: [-0.1, 0.1].
+multimodule_closure_range: [-0.1, 0.1]
+
+# Central DQM/data wafer templates; default follows the installed package. Omit to resolve as described.
+multimodule_geometry_dir: null
+
+# Minimum uncorrected coherent RMS for reduction ratios (ADC); suppress unstable near-zero denominators. Default: 0.05.
+multimodule_min_coherent_sigma: 0.05
+
+# Fixed noise RMS colour scale (ADC), common across modules, layers and methods. Default: [0, 2.5].
+multimodule_noise_range: [0, 2.5]
+
+# Number of bins in performance marginal histograms. Default: 35.
+multimodule_performance_bins: 35
+
+# Fixed limits shared by both performance axes; flow entries are counted. Default: [0.5, 1.1].
+multimodule_performance_range: [0.5, 1.1]
+
+# Run-level performance, detector_maps and/or canonical_maps; missing covariances/fits are calculated. Default: [performance, detector_maps, canonical_maps].
+multimodule_plot_groups: [performance, detector_maps, canonical_maps]
+
+# Corrected/uncorrected RMS ratio colour scale; must straddle one. Default: [0, 2].
+multimodule_ratio_range: [0, 2]
+
+# Canonical-map normalized deviations; must straddle zero. Default: [-1, 1].
+multimodule_relative_range: [-1, 1]
+
+# Fixed number of coherent components in covariance decomposition; not an automatically selected rank. Default: 3.
+n_coherent_noise_model: 3
+
+# Hidden-layer widths; scalar output is added automatically. Advanced; keep fixed for ordinary analyses. Default: [256, 256, 256, 32].
+nodes: [256, 256, 256, 32]
+
+# AdamW first/second moment decay factors. Default: [0.9, 0.999].
+optimizer_betas: [0.9, 0.999]
+
+# AdamW denominator epsilon. Default: 1.0e-08.
+optimizer_epsilon: 1.0e-08
+
+# Enable the central 1000-event binning prescan before pedestal production. Default: false.
+pedestal_optimize_binning: false
+
+# Number of ADC histogram bins. Default: 400.
+plot_adc_bins: 400
+
+# Pedestal-subtracted ADC histogram limits (ADC units). Values outside remain in full moments. Default: [-100, 200].
+plot_adc_range: [-100, 200]
+
+# Fixed colour limits for covariance displays (ADC squared). Default: [-5, 5].
+plot_covariance_range: [-5, 5]
+
+# Reserved unsupported feature diagnostics: keep false. Default: false.
+plot_dnninputs: false
+
+# Base figure font size in points. Default: 12.
+plot_font_size: 12
+
+# pdf and/or png; matrix PDFs retain vector cells and colour bars. Default: [pdf].
+plot_formats: [pdf]
+
+# Gaussian initial amplitude, mean and width. Default: [1000000, 0, 3].
+plot_gaussian_initial: [1000000, 0, 3]
+
+# Per-module figure families: covariance, noise_model, spectra, channel_summaries, cell_area. Default: [covariance, noise_model, spectra, channel_summaries, cell_area].
+plot_groups: [covariance, noise_model, spectra, channel_summaries, cell_area]
+
+# Number of bins in mean channel-summary histograms. Default: 49.
+plot_mean_summary_bins: 49
+
+# Fixed mean channel-summary histogram limits. Default: [-5, 5].
+plot_mean_summary_range: [-5, 5]
+
+# Number of MIP-spectrum histogram bins. Default: 200.
+plot_mip_bins: 200
+
+# Fit pedestal plus single/double-MIP components; can be slow and is optional. Default: true.
+plot_mip_fit: true
+
+# ADC range used by the spectrum mixture fit. Default: [-5, 35].
+plot_mip_fit_range: [-5, 35]
+
+# Pedestal-subtracted ADC limits for the MIP-spectrum histogram (ADC units, not calibrated MIPs). Default: [-10, 40].
+plot_mip_range: [-10, 40]
+
+# Fixed y-axis noise RMS range for cell-area summaries (ADC). Default: [0, 4].
+plot_noise_area_range: [0, 4]
+
+# Independent D+LL^T fit; optional fixedD_uncorrected freezes D from the uncorrected fit. Default: [independent, fixedD_uncorrected].
+plot_noise_fit_variants: [independent, fixedD_uncorrected]
+
+# L-BFGS-B relative objective-change tolerance. Default: 2.220446049250313e-09.
+plot_noise_ftol: 2.220446049250313e-09
+
+# L-BFGS-B projected-gradient tolerance; a numerical analysis choice. Default: 1.0e-05.
+plot_noise_gtol: 1.0e-05
+
+# Reserved for development rank-selection studies; has no effect on the fixed-rank production workflow. Default: 0.8.
+plot_noise_localization_min: 0.8
+
+# Reserved for development rank-selection studies; has no effect on the fixed-rank production workflow. Default: 5.
+plot_noise_max_rank: 5
+
+# Maximum iterative covariance-fit iterations. Default: 2000.
+plot_noise_maxiter: 2000
+
+# Reserved for development rank-selection studies; has no effect on the fixed-rank production workflow. Default: 0.03.
+plot_noise_min_improvement: 0.03
+
+# Reserved for development rank-selection studies; has no effect on the fixed-rank production workflow. Default: 1.0e-12.
+plot_noise_objective_atol: 1.0e-12
+
+# Reserved for development rank-selection studies; has no effect on the fixed-rank production workflow. Default: 1.0e-06.
+plot_noise_objective_rtol: 1.0e-06
+
+# Reserved for development rank-selection studies; has no effect on the fixed-rank production workflow. Default: 0.1.
+plot_noise_variance_fraction_min: 0.1
+
+# Inclusive ADC window for restricted channel moments and the Gaussian core fit. Default: [-10, 10].
+plot_noise_window: [-10, 10]
+
+# Number of bins in ratio channel-summary histograms. Default: 49.
+plot_ratio_summary_bins: 49
+
+# Fixed ratio channel-summary histogram limits. Default: [0, 2.5].
+plot_ratio_summary_range: [0, 2.5]
+
+# Number of bins in sigma channel-summary histograms. Default: 49.
+plot_sigma_summary_bins: 49
+
+# Fixed sigma channel-summary histogram limits. Default: [0, 10].
+plot_sigma_summary_range: [0, 10]
+
+# Maximum spectrum fit function evaluations. Default: 20000.
+plot_spectrum_maxfev: 20000
+
+# Number of event-sum histogram bins. Default: 200.
+plot_sum_bins: 200
+
+# Limits for the event sum of finite selected channel ADCs. Default: [-1000, 10000].
+plot_sum_range: [-1000, 10000]
+
+# none or source_run_channel inverse-frequency loss weighting, separately per partition. Default: none.
+sample_weighting: none
+
+# Training source chunks buffered before event shuffling; validation uses one chunk. Default: 10.
+shuffle_buffer_chunks: 10
+
+# Require deterministic PyTorch algorithms; does not imply identical results across different hardware. Default: true.
+training_deterministic: true
+
+# auto, cpu or cuda. Same runtime and model format locally and in Condor. Default: auto.
+training_device: auto
+
+# Dedicated CUDA-capable venv; default <framework>/.venv_training. Omit to resolve as described.
+training_environment: null
+
+# Source rows per DNN read; part of the numeric-cache and optimizer ordering definition. Default: 50000.
+training_events_per_chunk: 50000
+
+# combined trains one DNN for selected modules; per_module trains separate models. Default: combined.
+training_grouping: combined
+
+# numeric_cache requires explicit training_cache build; root streams prepared ROOT each epoch. Default: numeric_cache.
+training_input_backend: numeric_cache
+
+# Pin compact CPU arrays for CUDA transfers; ignored for CPU training. Default: true.
+training_pin_memory: true
+
+# Bounded CPU queue; zero disables prefetch. CUDA expands inputs on the consumer GPU. Default: 1.
+training_prefetch_batches: 1
+
+# Resume incomplete matching last.pt. false refuses incomplete existing training; completed matching models are reused. Default: true.
+training_resume: true
+
+# 32-bit initialization/shuffle seed, distinct from the physical split seed. Default: 6789.
+training_seed: 6789
+
+# AdamW weight decay coefficient. Default: 0.0.
+weight_decay: 0.0

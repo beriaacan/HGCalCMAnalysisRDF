@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.lock
+
+# Local environments and credentials
+.venv_training/
+.env
+.env.*
+
+# Generated products and batch state
+/plots/
+/calibrations/
+/workdir_condor/
+/workdir_condor_*/
+.workflow_state/
+.workflow-locks/
+
+# Local development material
+/NEXT_STEPS.md
+/configs/archive/
+/development/
+/reference/
+/validation/

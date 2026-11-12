@@ -1,0 +1,15 @@
+# Regenerate missing Cassette products, sharing the Run118787 derivation.
+# Analysis choices remain in the referenced configs. Valid products are reused.
+analyses:
+  # Available goals: pedestals, prepare, training_inputs, analytic,
+  #   analytic_allinputs, training_cache, train, apply, plots, multimodule_plot, export.
+  - config: ../configs/cassette_118787.yaml
+    steps: [plots, multimodule_plot, export]
+  # Available goals: pedestals, prepare, training_inputs, analytic,
+  #   analytic_allinputs, training_cache, train, apply, plots, multimodule_plot, export.
+  - config: ../configs/cassette_118787_apply_118786.yaml
+    steps: [plots, multimodule_plot, export]
+
+max_jobs: 4
+max_io_jobs: 2
+max_gpu_jobs: 1

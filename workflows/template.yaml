@@ -1,0 +1,34 @@
+# Complete workflow option reference. Paths are relative to this YAML.
+# Referenced analysis YAMLs contain all scientific settings and pinned productions.
+analyses:
+  # Available goals: pedestals, prepare, training_inputs, analytic,
+  #   analytic_allinputs, training_cache, train, apply, plots, multimodule_plot, export.
+  - config: ../configs/cassette_118787.yaml
+    steps: [multimodule_plot]  # Omit to use this analysis YAML's steps.
+
+# Defaults are installation-relative, not YAML-relative. Omit to use them.
+work_dir: ../workdir_condor/workflows  # Frozen submissions/logs; use shared AFS.
+state_dir: ../.workflow_state        # Shared completion receipts; use shared AFS.
+max_jobs: 8                          # Maximum queued/running jobs in this DAG.
+max_io_jobs: 2                       # CPU-stage job limit in this DAG.
+max_gpu_jobs: 1                      # GPU-stage job limit in this DAG.
+retries: 0                          # Additional node attempts; default is explicit resume.
+
+# Default resource values come from each analysis config's condor_* settings.
+# GPUs default to condor_gpus for train and DNN apply (unless device: cpu),
+# otherwise zero. A shared stage must have compatible resource requests.
+# Each stage name accepts these same four optional keys. Omit unchanged fields.
+resources:
+  train:
+    cpus: 4                         # Default: condor_cpus.
+    gpus: 1                         # Default: condor_gpus.
+    memory_gb: 16                   # Default: condor_memory_gb.
+    job_flavour: tomorrow           # Default: condor_job_flavour.
+  apply:
+    cpus: 4
+    gpus: 1
+    memory_gb: 16
+    job_flavour: tomorrow
+# Other supported resource blocks: pedestals, prepare, training_inputs, analytic,
+# analytic_allinputs, training_cache, plots, multimodule_plot, export.
+# No nested submit_train: use the train processing goal inside a workflow.
