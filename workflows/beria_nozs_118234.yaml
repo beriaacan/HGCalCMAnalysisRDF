@@ -1,0 +1,7 @@
+# Beria: no-ZS baseline, train on 118212/118202/118205/118235, apply and plot on 118234.
+analyses:
+  - config: ../configs/beria_nozs_118234.yaml
+    steps: [plots, multimodule_plot]
+max_jobs: 4
+max_io_jobs: 2
+max_gpu_jobs: 1
