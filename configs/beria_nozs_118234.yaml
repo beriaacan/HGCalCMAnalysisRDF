@@ -71,6 +71,8 @@ condor_cpus: 4
 condor_gpus: 1
 condor_memory_gb: 16
 condor_job_flavour: tomorrow
+# Drops CMSSW CUDA libs in batch jobs (NVML driver mismatch on older-driver GPU nodes).
+condor_setup_file: beria_batch_setup.sh
 plot_groups: [covariance, noise_model, spectra, channel_summaries, cell_area]
 plot_adc_range: [-100, 200]
 plot_mip_fit: true
