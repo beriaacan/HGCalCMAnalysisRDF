@@ -26,7 +26,19 @@ derivation:
 application:
   campaign: Jun2026TB
   runs: [118234]
-  modules: all
+  # Explicit list: with a derivation module list, 'all' would mean the derivation modules only.
+  modules:
+    - ML_F3WC_IH0180
+    - ML_F3WC_IH0182
+    - ML_F3WC_IH0190
+    - ML_F3WC_IH0191
+    - ML_F3WC_IH0192
+    - ML_F3WC_IH0194
+    - ML_F3WC_IH0196
+    - ML_F3WC_IH0197
+    - ML_F3WC_IH0198
+    - ML_F3WD_IH0241
+    - ML_F3WD_IH0266
   allow_unknown_modules: true
   nano_production: '*'
   pedestal_run: 118212
