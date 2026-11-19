@@ -67,6 +67,9 @@ class TensorExpander:
         self.adc=torch.tensor(self.spec['adc_columns'],dtype=torch.int64,device=self.device)
         self.all_own=all(col>=0 for col in self.spec['adc_columns'])
         self.any_own=any(col>=0 for col in self.spec['adc_columns'])
+        from .training import own_mask_columns
+        self.mask=torch.tensor(own_mask_columns(self.spec),dtype=torch.int64,device=self.device)
+        self.any_mask=bool((self.mask>=0).any())
         width=self.spec['max_channels']
         area=[self.spec['modules'][n]['cell_area_fraction']+[0.]*(width-self.spec['modules'][n]['nch']) for n in self.names]
         self.area=torch.tensor(area,dtype=torch.float32,device=self.device)
@@ -109,6 +112,9 @@ class TensorExpander:
                 x[torch.arange(n,device=self.device),self.adc[channels]]=self.spec['missing_input_value']
             elif self.any_own:
                 own=self.adc[channels];valid=own>=0
+                x[torch.arange(n,device=self.device)[valid],own[valid]]=self.spec['missing_input_value']
+            if self.any_mask:  # the target's own ZS mask bit is hidden like its ADC
+                own=self.mask[channels];valid=own>=0
                 x[torch.arange(n,device=self.device)[valid],own[valid]]=self.spec['missing_input_value']
             area_column=None
             for offset,feature in enumerate(self.spec['local_features'],self.spec['global_size']):

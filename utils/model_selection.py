@@ -73,7 +73,7 @@ def validate_features(spec):
     width = spec['max_channels']
     if type(width) is not int or width != 444:
         raise ValueError('Selected DNN must use the common 444-channel representation')
-    names, adc = [], [-1]*width
+    names, adc, mask = [], [-1]*width, [-1]*width
     for group in spec['global_groups']:
         if group == 'cm_erx':
             names += [f'cm_erx{i:02d}' for i in range(width//37)]
@@ -85,9 +85,13 @@ def validate_features(spec):
         elif group == 'adc_allchannels':
             adc = list(range(len(names), len(names)+width))
             names += [f'adc_allch_{i:03d}' for i in range(width)]
+        elif group == 'zs_mask_allchannels':
+            mask = list(range(len(names), len(names)+width))
+            names += [f'zsmask_allch_{i:03d}' for i in range(width)]
         else:
             raise ValueError(f'Unsupported saved DNN feature group: {group}')
     if (spec['global_size'] != len(names) or spec['adc_columns'] != adc
+            or spec.get('zs_mask_columns', [-1]*width) != mask
             or set(spec['local_features']) - {'channel_in_erx', 'erx_index', 'cell_area_fraction'}
             or names + spec['local_features'] != spec['feature_names']
             or spec['unknown_module_id'] != 0 or not math.isfinite(spec['missing_input_value'])):

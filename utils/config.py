@@ -22,6 +22,35 @@ METHODS = ("uncorrected", "analytic", "analytic_allinputs", "dnn")
 from .config_defaults import SETTINGS, complete_settings
 
 
+ZS_IDENTITY_KEYS = ('input_zs_threshold', 'input_unsuppressed_fraction')
+
+
+def _install_zero_suppression_identity():
+    """Add the input zero-suppression settings to the training-input identity.
+
+    Only configs that set them get the extra key, so all existing input/model IDs stay
+    unchanged. Done here rather than in identity.py because identity.py is part of the
+    prepare-stage code identity: editing it would invalidate every prepared run.
+    """
+    from . import identity
+    if getattr(identity.input_recipe, 'zero_suppression_aware', False):
+        return
+    base = identity.input_recipe
+
+    def input_recipe(config):
+        recipe = base(config)
+        settings = {key: config.dnn.get(key) for key in ZS_IDENTITY_KEYS}
+        if any(value is not None for value in settings.values()):
+            recipe['input_zero_suppression'] = settings
+        return recipe
+
+    input_recipe.zero_suppression_aware = True
+    identity.input_recipe = input_recipe
+
+
+_install_zero_suppression_identity()
+
+
 @dataclass(frozen=True)
 class SourceRun:
     run: int
@@ -195,7 +224,8 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
                      ('device','batch_events','events_per_chunk','prefetch_batches','pin_memory')})
     settings['infer_batch']=application['infer_batch']
     settings['allow_unknown_modules']=application['allow_unknown_modules']
-    nulls=[key for key in SETTINGS if key!='condor_proxy' and effective[key] is None]
+    nullable={'condor_proxy','input_zs_threshold','input_unsuppressed_fraction'}
+    nulls=[key for key in SETTINGS if key not in nullable and effective[key] is None]
     if nulls:
         raise ValueError('These settings cannot be null: '+', '.join(sorted(nulls)))
     configured_steps=validate_steps(settings['steps'])
@@ -287,7 +317,8 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
     if not 0 < dnn['validation_split_fraction'] < 1:
         raise ValueError('validation_split_fraction must be in (0, 1)')
     groups = settings['input_features']
-    global_groups = {'cm_erx', 'activity_fractions', 'module_id', 'module_fraction', 'adc_allchannels'}
+    global_groups = {'cm_erx', 'activity_fractions', 'module_id', 'module_fraction', 'adc_allchannels',
+                     'zs_mask_allchannels'}
     local_groups = {'channel_in_erx', 'erx_index', 'cell_area_fraction'}
     if (not isinstance(groups, list) or not groups or any(not isinstance(g, str) for g in groups)
             or len(set(groups)) != len(groups) or set(groups) - global_groups - local_groups):
@@ -305,6 +336,24 @@ def load_config(filename: str | Path, steps: list[str] | None = None) -> Analysi
     dnn['missing_input_value'] = number(settings['missing_input_value'], 'missing_input_value')
     if abs(dnn['missing_input_value']) > 3.4028234663852886e38:
         raise ValueError('missing_input_value must be representable as float32')
+    # Zero suppression of the all-channel ADC inputs (training and application alike):
+    # finite pedestal-subtracted ADC <= threshold is set to 0, except a random fraction of
+    # channels per event (hash of module, event, channel). Targets are not affected.
+    threshold, fraction = settings['input_zs_threshold'], settings['input_unsuppressed_fraction']
+    dnn['input_zs_threshold'] = None if threshold is None else number(threshold, 'input_zs_threshold')
+    dnn['input_unsuppressed_fraction'] = None if fraction is None else number(fraction, 'input_unsuppressed_fraction')
+    if dnn['input_zs_threshold'] is not None and dnn['input_zs_threshold'] <= 0:
+        raise ValueError('input_zs_threshold must be positive when set')
+    if dnn['input_unsuppressed_fraction'] is not None:
+        if dnn['input_zs_threshold'] is None:
+            raise ValueError('input_unsuppressed_fraction requires input_zs_threshold')
+        if not 0 < dnn['input_unsuppressed_fraction'] < 1:
+            raise ValueError('input_unsuppressed_fraction must be in (0, 1)')
+    if 'zs_mask_allchannels' in groups:
+        if dnn['input_zs_threshold'] is None or 'adc_allchannels' not in groups:
+            raise ValueError('zs_mask_allchannels requires input_zs_threshold and adc_allchannels')
+        if set(settings['methods']) & {'analytic', 'analytic_allinputs'}:
+            raise ValueError('zs_mask_allchannels supports methods: [uncorrected, dnn] only')
     dnn['cell_area_file'] = local_path(settings['cell_area_file'], path.parent, 'cell_area_file')
     dnn['module_registry_file'] = local_path(settings['module_registry_file'], path.parent, 'module_registry_file')
     resources = {name: positive_int(settings[name], name)

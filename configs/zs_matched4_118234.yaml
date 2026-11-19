@@ -1,0 +1,90 @@
+# Beria: zero-suppression study on held-out 118234. Matched ZS=4: inputs ZS=4, target 4 < s <= 10.
+# Same runs/modules as beria_nozs_118234.yaml. Inputs as the RDF defaults WITHOUT cm_erx (as the old framework).
+# ZS applies to the all-channel ADC inputs in training AND application; evaluation target: s <= 10.
+
+# Available steps: pedestals, prepare, training_inputs, analytic, analytic_allinputs,
+#   training_cache, train, submit_train, apply, plots, multimodule_plot, export.
+steps: [prepare]
+methods: [uncorrected, dnn]
+output_dir: /eos/user/b/bcan/hgcal_rdf
+
+derivation:
+  campaign: Jun2026TB
+  runs: [118212, 118202, 118205, 118235]
+  modules:
+    - ML_F3WC_IH0180
+    - ML_F3WC_IH0182
+    - ML_F3WC_IH0190
+    - ML_F3WC_IH0191
+    - ML_F3WC_IH0192
+    - ML_F3WC_IH0194
+    - ML_F3WC_IH0196
+    - ML_F3WC_IH0197
+    - ML_F3WC_IH0198
+    - ML_F3WD_IH0241
+    - ML_F3WD_IH0266
+  nano_production: '*'
+  pedestal_run: 118212
+  selection: trigtime
+  trigger_time_min: -2
+  trigger_time_max: 5
+  adc_min: 4
+  adc_max: 10
+  split_seed: 6789
+  validation_split_fraction: 0.2
+  train_event_fraction: 1.0
+  validation_event_fraction: 1.0
+
+application:
+  campaign: Jun2026TB
+  runs: [118234]
+  modules: all
+  nano_production: '*'
+  pedestal_run: 118212
+  selection: trigtime
+  trigger_time_min: -2
+  trigger_time_max: 5
+  adc_max: 10
+  device: auto
+  infer_batch: 8192
+
+# Zero suppression of the DNN inputs
+input_features: [activity_fractions, module_id, module_fraction, adc_allchannels, channel_in_erx, erx_index, cell_area_fraction]
+input_zs_threshold: 4
+
+# DNN training, processing resources and plotting
+epochs: 200
+batch_events: 1024
+learning_rate: 0.001
+weight_decay: 0.0
+sample_weighting: none
+training_grouping: combined
+training_device: auto
+training_resume: true
+# Venv on EOS (home quota too small). Use the /eos path, not the .venv_training symlink:
+# the scheduler-side freeze check skips /eos paths only by prefix.
+training_environment: /eos/user/b/bcan/venvs/hgcal_rdf_training
+training_input_backend: numeric_cache
+training_events_per_chunk: 50000
+shuffle_buffer_chunks: 10
+training_prefetch_batches: 1
+training_pin_memory: true
+# Local runs on lxplus: keep CPU use low. Condor jobs get their own cores.
+cpus: 2
+events_per_chunk: 5000
+condor_cpus: 4
+condor_gpus: 1
+condor_memory_gb: 16
+condor_job_flavour: tomorrow
+# Drops CMSSW CUDA libs in batch jobs (NVML driver mismatch on older-driver GPU nodes).
+condor_setup_file: beria_batch_setup.sh
+plot_groups: [covariance, noise_model, spectra, channel_summaries, cell_area]
+plot_adc_range: [-100, 200]
+plot_mip_fit: true
+n_coherent_noise_model: 3
+plot_noise_fit_variants: [independent, fixedD_uncorrected]
+plot_noise_maxiter: 2000
+plot_noise_gtol: 1.0e-05
+plot_noise_ftol: 2.220446049250313e-09
+multimodule_plot_groups: [performance, detector_maps, canonical_maps]
+multimodule_noise_range: [0, 2.5]

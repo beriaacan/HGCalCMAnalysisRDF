@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import zlib
 from pathlib import Path
 
 from .prepare_rdf import analysis_view, initialize_root, threshold_label
@@ -56,6 +57,7 @@ def make_feature_spec(config, modules: dict) -> dict:
         geometries[name] = {'module_id': module_id, 'nch': nch, 'nerx': nerx,
                             'cell_area_fraction': values}
     names, transforms, adc_columns, local = [], [], [-1]*width, []
+    zs_mask_columns = [-1]*width
     global_groups = []
     for group in settings['input_features']:
         if group in LOCAL_KINDS:
@@ -69,6 +71,10 @@ def make_feature_spec(config, modules: dict) -> dict:
             fields = [f'adc_allch_{i:03d}' for i in range(width)]
             adc_columns = list(range(len(names), len(names)+width))
             modes = ['zscore']*width
+        elif group == 'zs_mask_allchannels':
+            fields = [f'zsmask_allch_{i:03d}' for i in range(width)]
+            zs_mask_columns = list(range(len(names), len(names)+width))
+            modes = ['identity']*width
         elif group == 'activity_fractions':
             fields = ['nchtoa_fraction', 'nchtot_fraction'] + [
                 f'nchadcgt{threshold_label(t)}_fraction' for t in config.preparation['activity_thresholds']]
@@ -95,6 +101,14 @@ def make_feature_spec(config, modules: dict) -> dict:
             'split_labels': {'0': 'train', '1': 'validation'}, 'independent_test_set': False}
     if 'module_fraction' in global_groups:
         result['module_fraction_denominator'] = 444
+    if settings.get('input_zs_threshold') is not None:
+        result['input_zs'] = {'threshold': settings['input_zs_threshold'],
+                              'unsuppressed_fraction': settings.get('input_unsuppressed_fraction'),
+                              'rule': 'finite adc_pedsub <= threshold -> 0 unless hash(module,event,channel) < fraction',
+                              'hash': 'splitmix64(event*0x9E3779B97F4A7C15 + channel*0xBF58476D1CE4E5B9 + crc32(module))'}
+    if 'zs_mask_allchannels' in global_groups:
+        result['zs_mask_columns'] = zs_mask_columns
+        result['target_input_mask'] += '; same for its own ZS mask bit'
     if calibration_only(settings):
         result.update(preprocessing_mode='calibration_only', cm_convention=CENTERED_CM,
                       module_id_convention='stable_registry_v1',
@@ -121,11 +135,22 @@ def global_expression(config, spec: dict, module: str, *, recipe=None) -> str:
         statements.append(f'static const auto cm_reference = {_vector(reference,allow_missing=True)};')
         cm = '(cm_erx - cm_reference)'
 
+    adc = 'adc_pedsub'
+    zs = spec.get('input_zs')
+    if zs is not None:
+        fraction = zs['unsuppressed_fraction'] if zs['unsuppressed_fraction'] is not None else 0.
+        salt = zlib.crc32(module.encode('utf-8'))
+        statements.append(f'const auto zs_mask = hgcal_cm_training::zs_mask(adc_pedsub,{zs["threshold"]:.17g},'
+                          f'{fraction:.17g},ULong64_t(event),{salt}ULL);')
+        statements.append('const auto adc_zs = hgcal_cm_training::zero_suppressed(adc_pedsub,zs_mask);')
+        adc = 'adc_zs'
     for group in spec['global_groups']:
         if group == 'cm_erx':
             statements.append(f'hgcal_cm_training::append(out,hgcal_cm_training::padded({cm},{width//37},{fill:.17g}));')
         elif group == 'adc_allchannels':
-            statements.append(f'hgcal_cm_training::append(out,hgcal_cm_training::padded(adc_pedsub,{width},{fill:.17g}));')
+            statements.append(f'hgcal_cm_training::append(out,hgcal_cm_training::padded({adc},{width},{fill:.17g}));')
+        elif group == 'zs_mask_allchannels':
+            statements.append(f'hgcal_cm_training::append(out,hgcal_cm_training::padded(zs_mask,{width},{fill:.17g}));')
         elif group == 'activity_fractions':
             columns = ['nchtoa', 'nchtot'] + [f'nchadcgt{threshold_label(t)}' for t in config.preparation['activity_thresholds']]
             statements.extend(f'out.push_back(float({column})/{meta["nch"]}.f);' for column in columns)
@@ -165,6 +190,11 @@ def training_view(rdf, config, spec: dict, module: str, source: dict, *, statist
     return rdf.Define('training_global_features', expression)
 
 
+def own_mask_columns(spec: dict) -> list[int]:
+    """Per channel, the column of its own ZS mask bit (-1 without mask features)."""
+    return list(spec.get('zs_mask_columns', [-1]*spec['max_channels']))
+
+
 def book_statistics(rdf, config, spec: dict, module: str):
     ROOT = initialize_training_root()
     node = rdf.Define('training_payload', 'hgcal_cm_training::Row{training_global_features, '
@@ -172,6 +202,7 @@ def book_statistics(rdf, config, spec: dict, module: str):
     return ROOT.hgcal_cm_training.book_statistics(
         ROOT.RDF.AsRNode(node), len(spec['feature_names']), spec['max_channels'],
         ROOT.VecOps.RVec['int'](spec['adc_columns']),
+        ROOT.VecOps.RVec['int'](own_mask_columns(spec)),
         ROOT.VecOps.RVec['int']([LOCAL_KINDS[name] for name in spec['local_features']]),
         ROOT.VecOps.RVec['float'](spec['modules'][module]['cell_area_fraction']),
         spec['missing_input_value'], config.dnn['preprocess_inputs'])
@@ -220,11 +251,15 @@ def iter_sample_batches(global_features, targets, spec: dict, module: str, batch
     rows, channels = np.nonzero(np.isfinite(targets))
     areas = np.asarray(meta['cell_area_fraction'], dtype=np.float32)
     adc_columns = np.asarray(spec['adc_columns'], dtype=int)
+    mask_columns = np.asarray(own_mask_columns(spec), dtype=int)
     for start in range(0, len(rows), batch_size):
         rr, cc = rows[start:start+batch_size], channels[start:start+batch_size]
         x = np.empty((len(rr), len(spec['feature_names'])), dtype=np.float32)
         x[:, :spec['global_size']] = global_features[rr]
         own = adc_columns[cc]
+        valid = own >= 0
+        x[np.flatnonzero(valid), own[valid]] = spec['missing_input_value']
+        own = mask_columns[cc]
         valid = own >= 0
         x[np.flatnonzero(valid), own[valid]] = spec['missing_input_value']
         for offset, feature in enumerate(spec['local_features'], spec['global_size']):

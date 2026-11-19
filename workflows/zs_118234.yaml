@@ -1,0 +1,21 @@
+# Beria: zero-suppression study on held-out 118234 (see configs/zs*_118234.yaml).
+analyses:
+  - config: ../configs/zs_matched4_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs_matched2_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs_matched1_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs4_target10_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs4_unsupp5_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs4_unsupp10_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs4_unsupp30_118234.yaml
+    steps: [plots, multimodule_plot]
+  - config: ../configs/zs4_unsupp10_cm_118234.yaml
+    steps: [plots, multimodule_plot]
+max_jobs: 4
+max_io_jobs: 2
+max_gpu_jobs: 1

@@ -31,6 +31,29 @@ inline RVec<float> padded(const RVec<float>& values, unsigned width, float fill)
   for (size_t i=0; i<values.size(); ++i) if (std::isfinite(values[i])) out[i] = values[i];
   return out;
 }
+// Zero suppression of the ADC inputs: 1 where a finite value <= threshold is suppressed.
+// A random fraction of channels per event is exempt; the draw is a hash of (module salt,
+// event, channel), identical to the old HGCalCMAnalysis random_unsuppressed_mask.
+inline double zs_uniform(std::uint64_t event, std::uint64_t channel, std::uint64_t salt) {
+  std::uint64_t x = event*0x9E3779B97F4A7C15ULL + channel*0xBF58476D1CE4E5B9ULL + salt;
+  x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ULL;
+  x ^= x >> 27; x *= 0x94D049BB133111EBULL;
+  x ^= x >> 31;
+  return double(x >> 11) / double(1ULL << 53);
+}
+inline RVec<float> zs_mask(const RVec<float>& adc, double threshold, double fraction,
+                           std::uint64_t event, std::uint64_t salt) {
+  RVec<float> mask(adc.size(), 0.f);
+  for (size_t c=0; c<adc.size(); ++c)
+    if (std::isfinite(adc[c]) && adc[c] <= threshold && !(fraction > 0 && zs_uniform(event, c, salt) < fraction))
+      mask[c] = 1.f;
+  return mask;
+}
+inline RVec<float> zero_suppressed(const RVec<float>& adc, const RVec<float>& mask) {
+  RVec<float> out(adc);
+  for (size_t c=0; c<out.size(); ++c) if (mask[c] > 0.f) out[c] = 0.f;
+  return out;
+}
 inline void append(RVec<float>& out, const RVec<float>& values) { out.insert(out.end(), values.begin(), values.end()); }
 inline unsigned count_targets(const RVec<float>& values) {
   unsigned count=0;
@@ -73,7 +96,7 @@ struct Statistics {
   float fill = 0.f;
   bool fit = true;
   Statistics() = default;
-  Statistics(unsigned nfeatures, unsigned max_channels, RVec<int> adc,
+  Statistics(unsigned nfeatures, unsigned max_channels, RVec<int> adc, RVec<int> own_mask,
              RVec<int> local, RVec<float> cell_areas, float missing, bool fit_inputs)
     : inputs(nfeatures), targets(max_channels), events(2,0), kept_events(2,0), samples(2,0),
       channel_counts(2*max_channels,0), adc_columns(std::move(adc)), local_kinds(std::move(local)),
@@ -82,6 +105,9 @@ struct Statistics {
     adc_target = RVec<int>(global_size, -1);
     for (size_t c=0; c<adc_columns.size(); ++c)
       if (adc_columns[c]>=0) adc_target.at(adc_columns[c]) = int(c);
+    // A target's own ZS mask bit is hidden like its own ADC.
+    for (size_t c=0; c<own_mask.size(); ++c)
+      if (own_mask[c]>=0) adc_target.at(own_mask[c]) = int(c);
   }
   void add(const Row& row) {
     if (row.partition>1 || row.targets.size()!=areas.size() || row.targets.size()>width) throw std::runtime_error("Invalid training row");
@@ -120,12 +146,12 @@ struct Statistics {
 };
 inline ROOT::RDF::RResultPtr<Statistics> book_statistics(
     ROOT::RDF::RNode node, unsigned nfeatures, unsigned width,
-    const RVec<int>& adc_columns, const RVec<int>& local_kinds, const RVec<float>& areas,
-    float fill, bool fit) {
+    const RVec<int>& adc_columns, const RVec<int>& own_mask, const RVec<int>& local_kinds,
+    const RVec<float>& areas, float fill, bool fit) {
   auto add = [](Statistics& stats, const Row& row) { stats.add(row); };
   auto merge = [](std::vector<Statistics>& slots) { for (size_t i=1; i<slots.size(); ++i) slots[0].merge(slots[i]); };
   return node.Aggregate(add, merge, "training_payload",
-                        Statistics(nfeatures,width,adc_columns,local_kinds,areas,fill,fit));
+                        Statistics(nfeatures,width,adc_columns,own_mask,local_kinds,areas,fill,fit));
 }
 }
 #endif
